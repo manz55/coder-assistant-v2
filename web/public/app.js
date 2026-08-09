@@ -200,44 +200,41 @@ function scheduleAudio(base64) {
 // ── Session (connect / disconnect) ─────────────────────────────────────────────
 
 async function connectSession() {
-  setState('connecting', 'solicitando micrófono...');
+  setState('connecting', 'conectando...');
 
+  // Audio setup — non-fatal: failure shows a toast but text chat still opens
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
       video: false,
     });
-  } catch {
-    setState('error', 'permiso de micrófono denegado');
-    return;
-  }
 
-  audioCtx = new AudioContext();
-  playTime = 0;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    playTime = 0;
 
-  // Output analyser: sits between sources and speakers — samples what's playing
-  outputAnalyserNode = createAnalyser(audioCtx, { fftSize: 256, smoothing: 0.75 });
-  outputAnalyserNode.connect(audioCtx.destination);
-  setOutAnalyser(outputAnalyserNode);
+    outputAnalyserNode = createAnalyser(audioCtx, { fftSize: 256, smoothing: 0.75 });
+    outputAnalyserNode.connect(audioCtx.destination);
+    setOutAnalyser(outputAnalyserNode);
 
-  try {
     await audioCtx.audioWorklet.addModule('/processor.js');
+
+    micSource = audioCtx.createMediaStreamSource(mediaStream);
+    micAnalyserNode = createAnalyser(audioCtx, { fftSize: 256, smoothing: 0.8 });
+    micSource.connect(micAnalyserNode);
+    setMicAnalyser(micAnalyserNode);
   } catch (err) {
-    console.error('Error cargando worklet:', err);
-    setState('error', 'error cargando procesador de audio');
-    cleanup();
-    return;
+    console.warn('[Audio] Setup fallido, continuando sin audio:', err.message);
+    showToast('audio no disponible — solo texto');
+    mediaStream?.getTracks().forEach(t => t.stop());
+    mediaStream = null;
+    if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+    outputAnalyserNode = null;
+    micSource = null;
+    micAnalyserNode = null;
+    setMicAnalyser(null);
+    setOutAnalyser(null);
   }
 
-  micSource = audioCtx.createMediaStreamSource(mediaStream);
-
-  // Mic analyser: reads level for robot animation while recording (never
-  // sends data anywhere — purely a local visualization tap)
-  micAnalyserNode = createAnalyser(audioCtx, { fftSize: 256, smoothing: 0.8 });
-  micSource.connect(micAnalyserNode);
-  setMicAnalyser(micAnalyserNode);
-
-  setState('connecting', 'conectando...');
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => setState('connecting', 'iniciando sesión...');
@@ -366,6 +363,10 @@ btnSession.onclick = () => {
 
 function startRecording() {
   if (!connected || recording || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!audioCtx || !micSource) {
+    showToast('audio no disponible en este dispositivo');
+    return;
+  }
 
   recording = true;
   btnTalk.classList.add('recording');
@@ -433,6 +434,21 @@ textForm.addEventListener('submit', (e) => {
   e.preventDefault();
   sendTextInput(textInput.value);
   textInput.value = '';
+  textInput.style.height = 'auto';
+});
+
+textInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendTextInput(textInput.value);
+    textInput.value = '';
+    textInput.style.height = 'auto';
+  }
+});
+
+textInput.addEventListener('input', () => {
+  textInput.style.height = 'auto';
+  textInput.style.height = Math.min(textInput.scrollHeight, 120) + 'px';
 });
 
 // ── Utility ───────────────────────────────────────────────────────────────────

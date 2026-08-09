@@ -208,7 +208,8 @@ wss.on('connection', async (ws) => {
           await runGroq(msg.text);
         } catch (err) {
           console.error('[Groq] Error:', err.message);
-          safeSend(ws, { type: 'error', message: err.message });
+          safeSend(ws, { type: 'text', content: '(error contactando Groq — intentá de nuevo)' });
+          safeSend(ws, { type: 'status', text: 'listening' });
         }
       }
 
@@ -235,7 +236,13 @@ wss.on('connection', async (ws) => {
           safeSend(ws, { type: 'file_received', filename: msg.filename });
 
           if (userContent) {
-            await runGroq(userContent);
+            try {
+              await runGroq(userContent);
+            } catch (err) {
+              console.error('[Groq] Error analizando archivo:', err.message);
+              safeSend(ws, { type: 'text', content: '(no pude analizar el archivo — intentá de nuevo)' });
+              safeSend(ws, { type: 'status', text: 'listening' });
+            }
           }
         } catch (err) {
           console.error('[WS] Error procesando archivo:', err.message);

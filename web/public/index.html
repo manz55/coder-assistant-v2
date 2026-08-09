@@ -51,6 +51,7 @@
       font-family: var(--font-display);
       color: var(--text-bright);
       user-select: none;
+      -webkit-user-select: none;
       -webkit-font-smoothing: antialiased;
       overflow-x: hidden;
       position: relative;
@@ -470,6 +471,7 @@
       display: flex;
       gap: 8px;
       width: 100%;
+      align-items: flex-end;
     }
 
     #text-input {
@@ -478,17 +480,30 @@
       border: 1.5px solid var(--panel-border);
       color: var(--text-bright);
       padding: 11px 16px;
-      border-radius: 999px;
+      border-radius: 20px;
       font-family: inherit;
-      font-size: 13px;
+      font-size: 16px;
       outline: none;
       transition: border-color 0.15s;
       min-width: 0;
+      resize: none;
+      overflow-y: hidden;
+      min-height: 44px;
+      max-height: 120px;
+      line-height: 1.45;
+      user-select: text;
+      -webkit-user-select: text;
     }
 
     #text-input::placeholder { color: var(--text-dim); }
     #text-input:focus { border-color: var(--accent); }
     #text-input:disabled { opacity: 0.5; }
+
+    /* Allow text selection in all content areas */
+    #transcript, #content-body, #email-content {
+      user-select: text;
+      -webkit-user-select: text;
+    }
 
     #btn-send {
       background: var(--panel);
@@ -721,7 +736,7 @@
         <button id="btn-talk" title="Mantené presionado para hablar">🎙️ Mantené presionado para hablar</button>
 
         <form id="text-form" class="text-form">
-          <input id="text-input" type="text" placeholder="o escribí acá…" autocomplete="off" maxlength="4000">
+          <textarea id="text-input" placeholder="o escribí acá…" autocomplete="off" maxlength="4000" rows="1"></textarea>
           <button id="btn-send" type="submit" title="Enviar">➤</button>
         </form>
       </div>
