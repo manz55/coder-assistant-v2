@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Coder</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0a0a0f">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg:            #08080d;
+      --bg-elevated:   #0e0e15;
+      --panel:         #16161f;
+      --panel-raised:  #1c1c29;
+      --panel-active:  #22222f;
+      --panel-border:  #2a2a3d;
+      --code-bg:       #101018;
+
+      --text-bright:   #f1f5f9;
+      --text-mid:      #a1a1b8;
+      --text-dim:      #6b6b85;
+
+      --accent:        #6366f1;
+      --accent-bright: #818cf8;
+      --success:       #22c55e;
+      --success-bright:#4ade80;
+      --warn:          #f59e0b;
+      --warn-bright:   #fbbf24;
+      --err:           #ef4444;
+      --err-bright:    #fca5a5;
+
+      --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+      --font-mono:    'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      --ease-out:     cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    html, body { height: 100%; }
+
+    body {
+      background: var(--bg);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-family: var(--font-display);
+      color: var(--text-bright);
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+      position: relative;
+      isolation: isolate;
+    }
+
+    /* Subtle living background — never a flat static black */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: -20%;
+      background:
+        radial-gradient(circle at 50% 28%, rgba(99, 102, 241, 0.11), transparent 55%),
+        radial-gradient(circle at 80% 75%, rgba(99, 102, 241, 0.05), transparent 50%);
+      animation: bg-breathe 14s var(--ease-out) infinite alternate;
+      pointer-events: none;
+      z-index: -2;
+    }
+
+    @keyframes bg-breathe {
+      0%   { transform: scale(1) translateY(0); opacity: 0.75; }
+      100% { transform: scale(1.18) translateY(-2%); opacity: 1; }
+    }
+
+    .particles {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    .particles span {
+      position: absolute;
+      bottom: -5%;
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: var(--accent-bright);
+      opacity: 0;
+      filter: blur(1px);
+      animation: particle-float linear infinite;
+    }
+
+    .particles span:nth-child(1) { left: 12%; width: 2px; height: 2px; animation-duration: 23s; animation-delay: 0s; }
+    .particles span:nth-child(2) { left: 30%; animation-duration: 29s; animation-delay: 4s; }
+    .particles span:nth-child(3) { left: 55%; width: 2px; height: 2px; animation-duration: 25s; animation-delay: 9s; }
+    .particles span:nth-child(4) { left: 72%; animation-duration: 33s; animation-delay: 2s; }
+    .particles span:nth-child(5) { left: 88%; width: 2px; height: 2px; animation-duration: 27s; animation-delay: 13s; }
+
+    @keyframes particle-float {
+      0%   { transform: translate(0, 0); opacity: 0; }
+      12%  { opacity: 0.4; }
+      88%  { opacity: 0.15; }
+      100% { transform: translate(18px, -108vh); opacity: 0; }
+    }
+
+    .app-shell {
+      width: 100%;
+      max-width: 600px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 22px;
+      padding: 32px 20px 28px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .wordmark {
+      font-size: 11px;
+      letter-spacing: 0.45em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      font-weight: 500;
+    }
+
+    /* ── ROBOT CONTAINER ─────────────────────────────────────── */
+
+    #robot-container {
+      position: relative;
+      width: 260px;
+      height: 260px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    /* ── STATUS ──────────────────────────────────────────────── */
+
+    #status {
+      font-size: 12px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      font-weight: 500;
+      color: var(--text-mid);
+      height: 16px;
+      transition: color 0.4s;
+    }
+
+    #status.live { color: var(--accent-bright); }
+    #status.err  { color: var(--err-bright); }
+
+    /* ── TRANSCRIPT PANEL ────────────────────────────────────── */
+
+    .panel {
+      width: 100%;
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+    }
+
+    #transcript {
+      width: 100%;
+      min-height: 64px;
+      max-height: 220px;
+      overflow-y: auto;
+      font-size: 14px;
+      line-height: 1.65;
+      color: var(--text-bright);
+      padding: 16px 18px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--panel-border) transparent;
+    }
+
+    #transcript:empty::before {
+      content: 'decí algo o escribí para empezar';
+      color: var(--text-dim);
+    }
+
+    /* ── CONTENT PANEL (mostrar_contenido) ───────────────────── */
+
+    #content-panel {
+      display: none;
+      width: 100%;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #content-panel.show {
+      display: flex;
+      animation: panel-in 0.32s var(--ease-out) both;
+    }
+
+    @keyframes panel-in {
+      from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    #content-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      background: var(--panel-raised);
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    #content-title {
+      flex: 1;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-bright);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #content-badge {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent-bright);
+      background: rgba(99, 102, 241, 0.14);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      border-radius: 999px;
+      padding: 3px 9px;
+      white-space: nowrap;
+    }
+
+    #content-close {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    #content-close:hover { color: var(--text-bright); background: rgba(255,255,255,0.06); }
+
+    #content-body {
+      margin: 0;
+      max-height: 360px;
+      overflow: auto;
+      padding: 16px 18px;
+      background: var(--code-bg);
+      color: var(--text-bright);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    #content-body.nowrap { white-space: pre; word-break: normal; }
+
+    /* ── EMAIL DRAFT PANEL (enviar_email) ────────────────────── */
+
+    #email-panel {
+      display: none;
+      width: 100%;
+      flex-direction: column;
+      overflow: hidden;
+      border-color: rgba(245, 158, 11, 0.35);
+    }
+
+    #email-panel.show {
+      display: flex;
+      animation: panel-in 0.32s var(--ease-out) both;
+    }
+
+    #email-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      background: var(--panel-raised);
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    #email-header .email-icon { font-size: 14px; }
+
+    #email-title {
+      flex: 1;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--warn-bright);
+    }
+
+    #email-close {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    #email-close:hover { color: var(--text-bright); background: rgba(255,255,255,0.06); }
+
+    #email-body {
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .email-field {
+      display: flex;
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .email-label {
+      color: var(--text-dim);
+      min-width: 48px;
+      flex-shrink: 0;
+    }
+
+    .email-field > span:last-child { color: var(--text-bright); word-break: break-word; }
+
+    #email-content {
+      background: var(--code-bg);
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--text-bright);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 220px;
+      overflow: auto;
+    }
+
+    #email-actions {
+      display: flex;
+      gap: 10px;
+      padding: 4px 18px 16px;
+    }
+
+    .email-btn {
+      flex: 1;
+      padding: 10px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: filter 0.15s, transform 0.15s var(--ease-out);
+    }
+
+    .email-btn:hover { transform: translateY(-1px); }
+    .email-btn:active { transform: translateY(0) scale(0.98); }
+
+    .email-btn-cancel {
+      background: transparent;
+      border: 1.5px solid var(--panel-border);
+      color: var(--text-mid);
+    }
+
+    .email-btn-cancel:hover { border-color: var(--err); color: var(--err-bright); }
+
+    .email-btn-approve {
+      background: rgba(34, 197, 94, 0.14);
+      border: 1.5px solid var(--success);
+      color: var(--success-bright);
+    }
+
+    .email-btn-approve:hover { filter: brightness(1.15); }
+
+    /* ── CONTROLS ────────────────────────────────────────────── */
+
+    .controls {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+
+    /* ── SESSION BUTTON (connect/disconnect) ─────────────────── */
+
+    #btn-session {
+      background: var(--panel);
+      border: 1.5px solid var(--panel-border);
+      color: var(--text-bright);
+      padding: 14px 46px;
+      border-radius: 999px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s, box-shadow 0.2s, background 0.2s, padding 0.2s, font-size 0.2s, transform 0.15s var(--ease-out);
+    }
+
+    #btn-session:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 22px rgba(99, 102, 241, 0.18);
+      transform: translateY(-1px);
+    }
+
+    #btn-session:active { transform: translateY(0) scale(0.98); }
+
+    #btn-session.connected {
+      padding: 6px 16px;
+      font-size: 10px;
+      color: var(--text-dim);
+      background: transparent;
+    }
+
+    #btn-session.connected:hover { color: var(--err-bright); border-color: var(--err); box-shadow: none; }
+
+    /* ── TALK AREA (push-to-talk + text) ─────────────────────── */
+
+    .talk-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .talk-area[hidden] { display: none; }
+    .talk-area.enter { animation: panel-in 0.4s var(--ease-out) both; }
+
+    #btn-talk {
+      background: var(--panel);
+      border: 1.5px solid var(--panel-border);
+      color: var(--text-bright);
+      padding: 16px 40px;
+      border-radius: 999px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      cursor: pointer;
+      touch-action: none;
+      transition: border-color 0.15s, color 0.15s, box-shadow 0.15s, background 0.15s, transform 0.15s var(--ease-out);
+    }
+
+    #btn-talk:hover:not(.recording) {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+      box-shadow: 0 0 18px rgba(99, 102, 241, 0.14);
+    }
+
+    #btn-talk.recording {
+      background: rgba(239, 68, 68, 0.14);
+      border-color: var(--err);
+      color: var(--err-bright);
+      box-shadow: 0 0 26px rgba(239, 68, 68, 0.22);
+      transform: scale(1.04);
+    }
+
+    .text-form {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+    }
+
+    #text-input {
+      flex: 1;
+      background: var(--panel);
+      border: 1.5px solid var(--panel-border);
+      color: var(--text-bright);
+      padding: 11px 16px;
+      border-radius: 999px;
+      font-family: inherit;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+      min-width: 0;
+    }
+
+    #text-input::placeholder { color: var(--text-dim); }
+    #text-input:focus { border-color: var(--accent); }
+    #text-input:disabled { opacity: 0.5; }
+
+    #btn-send {
+      background: var(--panel);
+      border: 1.5px solid var(--panel-border);
+      color: var(--text-mid);
+      width: 42px;
+      height: 42px;
+      flex-shrink: 0;
+      border-radius: 50%;
+      font-size: 15px;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+
+    #btn-send { transition: border-color 0.15s, color 0.15s, background 0.15s, transform 0.15s var(--ease-out); }
+    #btn-send:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-bright); transform: translateY(-1px) scale(1.05); }
+    #btn-send:disabled { opacity: 0.4; cursor: default; }
+
+    .toolbar {
+      display: flex;
+      gap: 6px;
+      padding: 6px;
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+    }
+
+    .icon-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      width: 60px;
+      height: 52px;
+      background: transparent;
+      border: none;
+      border-radius: 11px;
+      color: var(--text-mid);
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s, transform 0.15s var(--ease-out);
+    }
+
+    .icon-btn:hover { background: var(--panel-active); color: var(--text-bright); transform: translateY(-1px); }
+    .icon-btn:active { transform: translateY(0) scale(0.96); }
+
+    .icon-btn .icon { font-size: 17px; line-height: 1; }
+    .icon-btn .label {
+      font-size: 8.5px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    #btn-cam.active {
+      background: rgba(34, 197, 94, 0.14);
+      color: var(--success-bright);
+    }
+
+    #btn-file.uploading {
+      background: rgba(245, 158, 11, 0.14);
+      color: var(--warn-bright);
+    }
+
+    /* ── COOKING INDICATOR ───────────────────────────────────── */
+
+    #cooking {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 7px;
+    }
+
+    #cooking.show { display: flex; }
+
+    #cooking-label {
+      font-size: 10px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--warn-bright);
+    }
+
+    #cooking-filename {
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      color: var(--text-mid);
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .cook-dots {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      height: 14px;
+    }
+
+    .cook-dots span {
+      display: block;
+      width: 3px;
+      border-radius: 2px;
+      background: var(--warn);
+      animation: cook-bar 1.1s ease-in-out infinite;
+    }
+    .cook-dots span:nth-child(1) { height: 4px;  animation-delay: 0s; }
+    .cook-dots span:nth-child(2) { height: 4px;  animation-delay: 0.1s; }
+    .cook-dots span:nth-child(3) { height: 4px;  animation-delay: 0.2s; }
+    .cook-dots span:nth-child(4) { height: 4px;  animation-delay: 0.3s; }
+    .cook-dots span:nth-child(5) { height: 4px;  animation-delay: 0.4s; }
+
+    @keyframes cook-bar {
+      0%, 60%, 100% { height: 3px;  opacity: 0.25; }
+      30%            { height: 13px; opacity: 1; }
+    }
+
+    /* ── CAMERA PREVIEW ──────────────────────────────────────── */
+
+    #camera-preview {
+      display: none;
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 150px;
+      height: 112px;
+      border-radius: 8px;
+      border: 1.5px solid var(--success);
+      object-fit: cover;
+      transform: scaleX(-1);
+      box-shadow: 0 0 20px rgba(34,197,94,0.18), 0 4px 16px rgba(0,0,0,0.5);
+      transition: border-color 0.3s;
+    }
+
+    /* ── DROP OVERLAY ────────────────────────────────────────── */
+
+    #drop-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(99, 102, 241, 0.08);
+      border: 2px dashed rgba(99, 102, 241, 0.4);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    #drop-overlay.show { display: flex; }
+
+    #drop-overlay span {
+      font-size: 12px;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--accent-bright);
+    }
+
+    /* ── TOAST ───────────────────────────────────────────────── */
+
+    #toast {
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--panel-raised);
+      border: 1px solid var(--panel-border);
+      padding: 9px 20px;
+      border-radius: 999px;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      color: var(--accent-bright);
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 6px);
+      transition: opacity 0.25s var(--ease-out), transform 0.25s var(--ease-out);
+      white-space: nowrap;
+      z-index: 300;
+    }
+
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  </style>
+</head>
+<body>
+
+  <div class="particles" aria-hidden="true">
+    <span></span><span></span><span></span><span></span><span></span>
+  </div>
+
+  <div class="app-shell">
+    <span class="wordmark">Coder / Asistente</span>
+
+    <!-- Orb canvas is injected here by robot.js -->
+    <div id="robot-container"></div>
+
+    <span id="status">listo</span>
+
+    <div class="panel">
+      <div id="transcript"></div>
+    </div>
+
+    <div id="content-panel" class="panel">
+      <div id="content-header">
+        <span id="content-title"></span>
+        <span id="content-badge"></span>
+        <button id="content-close" title="Cerrar">✕</button>
+      </div>
+      <pre id="content-body"></pre>
+    </div>
+
+    <div id="email-panel" class="panel">
+      <div id="email-header">
+        <span class="email-icon">✉️</span>
+        <span id="email-title">Borrador de email — esperando confirmación</span>
+        <button id="email-close" title="Cancelar">✕</button>
+      </div>
+      <div id="email-body">
+        <div class="email-field"><span class="email-label">Para</span><span id="email-to"></span></div>
+        <div class="email-field"><span class="email-label">Asunto</span><span id="email-subject"></span></div>
+        <div id="email-content"></div>
+      </div>
+      <div id="email-actions">
+        <button id="email-cancel" class="email-btn email-btn-cancel" type="button">Cancelar</button>
+        <button id="email-approve" class="email-btn email-btn-approve" type="button">Enviar</button>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="btn-session">Conectar con Coder</button>
+
+      <div id="talk-area" class="talk-area" hidden>
+        <button id="btn-talk" title="Mantené presionado para hablar">🎙️ Mantené presionado para hablar</button>
+
+        <form id="text-form" class="text-form">
+          <input id="text-input" type="text" placeholder="o escribí acá…" autocomplete="off" maxlength="4000">
+          <button id="btn-send" type="submit" title="Enviar">➤</button>
+        </form>
+      </div>
+
+      <div class="toolbar">
+        <button id="btn-cam" class="icon-btn" title="Activar cámara">
+          <span class="icon">📷</span>
+          <span class="label">cámara</span>
+        </button>
+        <button id="btn-file" class="icon-btn" title="Enviar archivo">
+          <span class="icon">📎</span>
+          <span class="label">archivo</span>
+        </button>
+      </div>
+
+      <div id="cooking">
+        <span id="cooking-label">cocinando archivos</span>
+        <div class="cook-dots">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <span id="cooking-filename"></span>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="file-input" style="display:none"
+    accept="image/*,.pdf,.txt,.js,.ts,.jsx,.tsx,.py,.rs,.go,.java,.c,.cpp,.h,.css,.html,.xml,.yaml,.yml,.toml,.ini,.env,.md,.json,.sh,.sql,.vue,.svelte,.rb,.php,.cs,.graphql">
+
+  <video id="camera-preview" autoplay playsinline muted></video>
+
+  <div id="drop-overlay"><span>suelta el archivo aquí</span></div>
+
+  <div id="toast"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

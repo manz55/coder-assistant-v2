@@ -1,0 +1,20 @@
+{
+  "name": "coder-assistant",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "web": "node web/server.js",
+    "export-seed": "node scripts/export-seed.js"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "@google/generative-ai": "^0.21.0",
+    "@supabase/supabase-js": "^2.47.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "nodemailer": "^9.0.4",
+    "pdf-parse": "^2.4.5",
+    "ws": "^8.18.0"
+  }
+}
