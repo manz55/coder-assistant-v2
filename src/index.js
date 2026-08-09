@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import readline from 'node:readline';
+import Groq from 'groq-sdk';
 import { getSystemPrompt, getRelevantFacts, saveFact, saveConversationSummary } from './memory.js';
-import { buildModel, summarizeConversation } from './gemini.js';
+import { MODEL, TERMINAL_TOOLS, buildSystemContent, summarizeConversation } from './groq-brain.js';
 
 async function main() {
   console.log('Cargando a Coder...\n');
@@ -16,8 +17,9 @@ async function main() {
     process.exit(1);
   }
 
-  const model = buildModel(systemPrompt, facts);
-  const chat = model.startChat({ history: [] });
+  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  const systemContent = buildSystemContent(systemPrompt, facts);
+  const chatHistory = [];
 
   const startedAt = new Date().toISOString();
   const transcript = [];
@@ -40,37 +42,56 @@ async function main() {
     }
 
     try {
-      let result = await chat.sendMessage(message);
-      let calls = result.response.functionCalls();
+      chatHistory.push({ role: 'user', content: message });
 
-      while (calls && calls.length > 0) {
-        const responses = [];
-        for (const call of calls) {
-          if (call.name === 'guardar_hecho') {
-            const { category, content } = call.args;
-            const ok = await saveFact(category, content);
-            responses.push({
-              functionResponse: {
-                name: call.name,
-                response: { success: ok },
-              },
-            });
-            if (ok) {
-              console.log(`  (Coder guardó un hecho nuevo en "${category}")`);
-            }
+      let response = await groq.chat.completions.create({
+        model: MODEL,
+        messages: [{ role: 'system', content: systemContent }, ...chatHistory],
+        tools: TERMINAL_TOOLS,
+        tool_choice: 'auto',
+      });
+
+      let choice = response.choices[0];
+
+      while (choice.finish_reason === 'tool_calls') {
+        const toolCalls = choice.message.tool_calls ?? [];
+        chatHistory.push(choice.message);
+
+        for (const tc of toolCalls) {
+          const args = JSON.parse(tc.function.arguments);
+          let result = {};
+
+          if (tc.function.name === 'guardar_hecho') {
+            const ok = await saveFact(args.category, args.content);
+            result = { success: ok };
+            if (ok) console.log(`  (Coder guardó un hecho nuevo en "${args.category}")`);
           }
+
+          chatHistory.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            content: JSON.stringify(result),
+          });
         }
-        result = await chat.sendMessage(responses);
-        calls = result.response.functionCalls();
+
+        response = await groq.chat.completions.create({
+          model: MODEL,
+          messages: [{ role: 'system', content: systemContent }, ...chatHistory],
+          tools: TERMINAL_TOOLS,
+          tool_choice: 'auto',
+        });
+        choice = response.choices[0];
       }
 
-      const text = result.response.text();
+      const text = choice.message.content ?? '';
+      chatHistory.push({ role: 'assistant', content: text });
+
       console.log(`\nCoder > ${text}\n`);
 
       transcript.push({ role: 'user', text: message });
       transcript.push({ role: 'model', text });
     } catch (err) {
-      console.error('\nError hablando con Gemini:', err.message, '\n');
+      console.error('\nError hablando con Groq:', err.message, '\n');
     }
 
     rl.prompt();

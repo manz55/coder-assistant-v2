@@ -1,7 +1,8 @@
 import { initRobot, setState as robotSetState, setMicAnalyser, setOutAnalyser, triggerSpark } from './robot.js';
 import { createAnalyser } from './audio-analyser.js';
 
-const WS_URL = `ws://${location.host}/ws`;
+const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL = `${protocol}//${window.location.host}/ws`;
 
 const statusEl      = document.getElementById('status');
 const btnSession    = document.getElementById('btn-session');
