@@ -1,4 +1,9 @@
-const CACHE = 'coder-v13';
+// Bump this on every deploy that touches a file in STATIC — it's the only
+// thing that forces browsers with an old SW already installed (Safari,
+// Android Chrome) to fetch the new files instead of serving stale ones
+// from cache forever.
+const CACHE_VERSION = 'v14';
+const CACHE = `coder-cache-${CACHE_VERSION}`;
 
 const STATIC = [
   '/',
@@ -20,16 +25,21 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    )
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Cache-first for static assets; bypass for WebSocket and non-GET
+// Cache-first for static assets. WebSocket connections never reach a
+// service worker's fetch handler (browsers don't route ws:/wss: upgrades
+// through it), but we guard on scheme and path anyway so this stays
+// correct even if that ever changes — plus a plain non-GET bypass.
 self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET' || e.request.url.includes('/ws')) return;
+  const url = e.request.url;
+  if (e.request.method !== 'GET') return;
+  if (url.startsWith('ws:') || url.startsWith('wss:') || url.includes('/ws')) return;
+
   e.respondWith(
     caches.match(e.request).then((cached) => cached ?? fetch(e.request))
   );

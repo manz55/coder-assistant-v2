@@ -448,7 +448,7 @@ textInput.addEventListener('keydown', (e) => {
 
 textInput.addEventListener('input', () => {
   textInput.style.height = 'auto';
-  textInput.style.height = Math.min(textInput.scrollHeight, 120) + 'px';
+  textInput.style.height = Math.min(textInput.scrollHeight, 150) + 'px';
 });
 
 // ── Utility ───────────────────────────────────────────────────────────────────
