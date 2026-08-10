@@ -1,6 +1,9 @@
 import Groq from 'groq-sdk';
 
-export const MODEL = 'llama-3.3-70b-versatile';
+// llama-3.3-70b-versatile: Groq announced its deprecation 2026-06-17, hard
+// shutdown 2026-08-16 — requests started failing before the cutover date.
+// openai/gpt-oss-120b is Groq's recommended replacement with tool-use support.
+export const MODEL = 'openai/gpt-oss-120b';
 export const CATEGORIAS_VALIDAS = ['perfil', 'proyectos', 'ventas_jzet_labs', 'dev_preferences', 'personal'];
 export const TIPOS_CONTENIDO_VALIDOS = ['codigo', 'sql', 'texto', 'lista'];
 

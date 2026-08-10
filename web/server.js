@@ -83,6 +83,33 @@ function safeSend(ws, obj) {
   }
 }
 
+// Groq SDK errors carry status/error.code/error.type from the API response
+// (see node_modules/groq-sdk/core/error.js) — log all of it so a failure is
+// diagnosable from `render logs` alone, and turn it into a message that
+// actually says what broke instead of a generic "intentá de nuevo".
+function describeGroqError(err) {
+  const status = err?.status;
+  // The SDK stores the raw response body as `err.error`; Groq's body shape
+  // is itself `{ error: { message, type, code } }`, so it's nested twice.
+  const body = err?.error?.error ?? err?.error ?? {};
+  const code = body?.code ?? err?.code ?? null;
+  const type = body?.type ?? null;
+  const apiMessage = body?.message ?? err?.message ?? String(err);
+
+  console.error(
+    `[Groq] status=${status ?? 'n/a'} code=${code ?? 'n/a'} type=${type ?? 'n/a'} model=${MODEL} — ${apiMessage}`
+  );
+
+  if (status === 401) return '(Groq rechazó la API key — revisá GROQ_API_KEY en las variables de entorno del servidor)';
+  if (status === 429) return '(límite de uso de Groq alcanzado — esperá un momento y probá de nuevo)';
+  if (code === 'model_decommissioned' || code === 'model_not_found') {
+    return `(el modelo "${MODEL}" no está disponible en Groq — hay que actualizar MODEL en src/groq-brain.js)`;
+  }
+  if (typeof status === 'number' && status >= 500) return '(Groq está teniendo problemas del lado de ellos — probá de nuevo en un rato)';
+
+  return `(error contactando Groq — ${String(apiMessage).slice(0, 100)})`;
+}
+
 wss.on('connection', async (ws) => {
   console.log('[WS] Cliente conectado');
   let pendingEmailDraft = null;
@@ -207,8 +234,7 @@ wss.on('connection', async (ws) => {
         try {
           await runGroq(msg.text);
         } catch (err) {
-          console.error('[Groq] Error:', err.message);
-          safeSend(ws, { type: 'text', content: '(error contactando Groq — intentá de nuevo)' });
+          safeSend(ws, { type: 'text', content: describeGroqError(err) });
           safeSend(ws, { type: 'status', text: 'listening' });
         }
       }
@@ -239,8 +265,7 @@ wss.on('connection', async (ws) => {
             try {
               await runGroq(userContent);
             } catch (err) {
-              console.error('[Groq] Error analizando archivo:', err.message);
-              safeSend(ws, { type: 'text', content: '(no pude analizar el archivo — intentá de nuevo)' });
+              safeSend(ws, { type: 'text', content: describeGroqError(err) });
               safeSend(ws, { type: 'status', text: 'listening' });
             }
           }
