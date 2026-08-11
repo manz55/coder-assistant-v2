@@ -179,18 +179,49 @@ export const ALL_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'crear_recordatorio',
+      description:
+        'Crea un recordatorio para una fecha y hora futura — Coder le manda una notificación push al celular de Joshua ' +
+        'cuando llega el momento. Usala cuando Joshua pida que le recuerdes algo en un momento específico. Resolvé fechas ' +
+        'relativas ("mañana", "en 2 horas", "el viernes") usando la fecha y hora actual que tenés en el system prompt. ' +
+        'Después de invocarla, confirmá con Joshua qué guardaste y para cuándo usando fecha_hora_legible que te devuelve — nunca le muestres el ISO crudo.',
+      parameters: {
+        type: 'object',
+        properties: {
+          mensaje: { type: 'string', description: 'Qué hay que recordarle a Joshua' },
+          fecha_hora: { type: 'string', description: 'Fecha y hora en formato ISO 8601, ej. "2026-08-15T14:30:00"' },
+        },
+        required: ['mensaje', 'fecha_hora'],
+      },
+    },
+  },
 ];
 
 export const TERMINAL_TOOLS = ALL_TOOLS.filter(t => t.function.name === 'guardar_hecho');
 
 export function buildSystemContent(systemPrompt, facts) {
-  if (!facts.length) return systemPrompt;
-  return (
-    systemPrompt +
-    '\n\n--- HECHOS QUE SABÉS SOBRE JOSHUA ---\n' +
-    facts.map(f => `[${f.category}] ${f.content}`).join('\n') +
-    '\n--- FIN DE HECHOS ---'
-  );
+  // Needed so crear_recordatorio can resolve relative dates ("mañana",
+  // "en 2 horas") into a real ISO timestamp — nothing else in the prompt
+  // ever tells the model what "now" is.
+  const now = new Date().toLocaleString('es-AR', {
+    dateStyle: 'full',
+    timeStyle: 'short',
+    timeZone: 'America/Argentina/Buenos_Aires',
+  });
+
+  let content = `${systemPrompt}\n\n--- FECHA Y HORA ACTUAL ---\n${now} (America/Argentina/Buenos_Aires)\n--- FIN FECHA Y HORA ---`;
+
+  if (facts.length) {
+    content +=
+      '\n\n--- HECHOS QUE SABÉS SOBRE JOSHUA ---\n' +
+      facts.map(f => `[${f.category}] ${f.content}`).join('\n') +
+      '\n--- FIN DE HECHOS ---';
+  }
+
+  return content;
 }
 
 export async function summarizeConversation(transcript) {

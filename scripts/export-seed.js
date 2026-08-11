@@ -72,11 +72,22 @@ CREATE TABLE IF NOT EXISTS coder_conversation_summaries (
 );
 
 
--- ── 4. HABILITAR RLS (Row Level Security) ────────────────────────────
+-- ── 4. RECORDATORIOS ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS coder_reminders (
+  id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  mensaje    TEXT        NOT NULL,
+  fecha_hora TIMESTAMPTZ NOT NULL,
+  notificado BOOLEAN     DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+
+-- ── 5. HABILITAR RLS (Row Level Security) ────────────────────────────
 -- Por ahora acceso libre; ajustá las políticas según tu caso de uso.
 ALTER TABLE coder_config                  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE coder_facts                   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE coder_conversation_summaries  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE coder_reminders               ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY IF NOT EXISTS "anon_all_config"
   ON coder_config FOR ALL TO anon USING (true) WITH CHECK (true);
@@ -87,11 +98,15 @@ CREATE POLICY IF NOT EXISTS "anon_all_facts"
 CREATE POLICY IF NOT EXISTS "anon_all_summaries"
   ON coder_conversation_summaries FOR ALL TO anon USING (true) WITH CHECK (true);
 
+CREATE POLICY IF NOT EXISTS "anon_all_reminders"
+  ON coder_reminders FOR ALL TO anon USING (true) WITH CHECK (true);
+
 
 -- ── LISTO ─────────────────────────────────────────────────────────────
 -- Verificá con:
 --   SELECT * FROM coder_config;
 --   SELECT * FROM coder_facts;
+--   SELECT * FROM coder_reminders;
 `;
 
 writeFileSync(OUT, sql, 'utf8');

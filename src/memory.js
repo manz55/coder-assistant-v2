@@ -52,3 +52,34 @@ export async function saveConversationSummary(summary, topics, startedAt) {
 
   if (error) throw new Error(`Error al guardar resumen: ${error.message}`);
 }
+
+export async function createReminder(mensaje, fechaHora) {
+  const { data, error } = await supabase
+    .from('coder_reminders')
+    .insert({ mensaje, fecha_hora: fechaHora })
+    .select()
+    .single();
+
+  if (error) throw new Error(`Error al guardar recordatorio: ${error.message}`);
+  return data;
+}
+
+export async function getDueReminders() {
+  const { data, error } = await supabase
+    .from('coder_reminders')
+    .select('id, mensaje, fecha_hora')
+    .eq('notificado', false)
+    .lte('fecha_hora', new Date().toISOString());
+
+  if (error) throw new Error(`Error al buscar recordatorios pendientes: ${error.message}`);
+  return data;
+}
+
+export async function markReminderNotified(id) {
+  const { error } = await supabase
+    .from('coder_reminders')
+    .update({ notificado: true })
+    .eq('id', id);
+
+  if (error) throw new Error(`Error al marcar recordatorio como notificado: ${error.message}`);
+}

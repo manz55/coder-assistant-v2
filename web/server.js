@@ -8,7 +8,7 @@ import { networkInterfaces } from 'node:os';
 import Groq, { toFile } from 'groq-sdk';
 import { PDFParse } from 'pdf-parse';
 import nodemailer from 'nodemailer';
-import { getSystemPrompt, getRelevantFacts, saveFact } from '../src/memory.js';
+import { getSystemPrompt, getRelevantFacts, saveFact, createReminder, getDueReminders, markReminderNotified } from '../src/memory.js';
 import { MODEL, ALL_TOOLS, buildSystemContent } from '../src/groq-brain.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,6 +76,35 @@ async function sendNtfyNotification(titulo, mensaje) {
 
   if (!res.ok) throw new Error(`ntfy.sh respondió ${res.status}`);
 }
+
+// crear_recordatorio — background check, independent of any WS connection.
+// Only marks a reminder as notified after the ntfy push actually succeeds,
+// so a transient ntfy failure just retries on the next tick instead of
+// silently losing the reminder.
+const REMINDER_CHECK_INTERVAL_MS = 60 * 1000;
+
+async function checkDueReminders() {
+  let due;
+  try {
+    due = await getDueReminders();
+  } catch (err) {
+    console.error('[Recordatorios] Error buscando pendientes:', err.message);
+    return;
+  }
+
+  for (const reminder of due) {
+    try {
+      await sendNtfyNotification('Recordatorio', reminder.mensaje);
+      await markReminderNotified(reminder.id);
+      console.log(`[Recordatorios] Notificado: "${reminder.mensaje}"`);
+    } catch (err) {
+      console.error(`[Recordatorios] Error notificando "${reminder.mensaje}":`, err.message);
+    }
+  }
+}
+
+checkDueReminders();
+setInterval(checkDueReminders, REMINDER_CHECK_INTERVAL_MS);
 
 // leer_repo_github — public GitHub Contents API; GITHUB_TOKEN is optional and
 // only needed to read private repos (public ones work with zero config).
@@ -381,6 +410,23 @@ wss.on('connection', async (ws) => {
             result = { success: true, respuesta, resultados };
           } catch (err) {
             console.error('[Tool] Error buscando en la web:', err.message);
+            result = { success: false, error: err.message };
+          }
+        }
+
+        if (tc.function.name === 'crear_recordatorio') {
+          const { mensaje, fecha_hora } = args;
+          try {
+            const reminder = await createReminder(mensaje, fecha_hora);
+            const legible = new Date(reminder.fecha_hora).toLocaleString('es-AR', {
+              dateStyle: 'full',
+              timeStyle: 'short',
+              timeZone: 'America/Argentina/Buenos_Aires',
+            });
+            console.log(`[Tool] Recordatorio creado: "${mensaje}" para ${legible}`);
+            result = { success: true, mensaje, fecha_hora_legible: legible };
+          } catch (err) {
+            console.error('[Tool] Error creando recordatorio:', err.message);
             result = { success: false, error: err.message };
           }
         }
