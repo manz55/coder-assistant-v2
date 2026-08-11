@@ -118,6 +118,42 @@ async function readGithubFile(repo, ruta) {
   return Buffer.from(data.content, 'base64').toString('utf-8');
 }
 
+// buscar_web — Tavily search API (free tier: 1000 searches/month, no card)
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY || null;
+
+if (!TAVILY_API_KEY) {
+  console.warn('[Tavily] TAVILY_API_KEY no configurada — buscar_web fallará hasta que se agregue al .env');
+}
+
+async function searchWeb(query) {
+  if (!TAVILY_API_KEY) throw new Error('TAVILY_API_KEY no configurada en el servidor');
+
+  const res = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${TAVILY_API_KEY}`,
+    },
+    body: JSON.stringify({
+      query,
+      max_results: 5,
+      include_answer: 'basic', // short synthesized answer, on top of the per-result snippets
+    }),
+  });
+
+  if (!res.ok) throw new Error(`Tavily respondió ${res.status}`);
+
+  const data = await res.json();
+  return {
+    respuesta: data.answer ?? null,
+    resultados: (data.results ?? []).map((r) => ({
+      titulo: r.title,
+      url: r.url,
+      resumen: r.content,
+    })),
+  };
+}
+
 // Push-to-talk STT — the client's AudioWorklet (processor.js) already
 // downsamples the mic to mono 16 kHz PCM16 before streaming it over, so all
 // that's left server-side is to wrap the raw samples in a WAV header and
@@ -334,6 +370,17 @@ wss.on('connection', async (ws) => {
             result = { success: true, contenido: contenido.slice(0, 60000) };
           } catch (err) {
             console.error('[Tool] Error leyendo repo de GitHub:', err.message);
+            result = { success: false, error: err.message };
+          }
+        }
+
+        if (tc.function.name === 'buscar_web') {
+          try {
+            const { respuesta, resultados } = await searchWeb(args.query);
+            console.log(`[Tool] Tavily "${args.query}": ${resultados.length} resultados`);
+            result = { success: true, respuesta, resultados };
+          } catch (err) {
+            console.error('[Tool] Error buscando en la web:', err.message);
             result = { success: false, error: err.message };
           }
         }

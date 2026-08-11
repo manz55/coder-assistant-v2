@@ -163,6 +163,22 @@ export const ALL_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'buscar_web',
+      description:
+        'Busca información actual en internet — noticias, precios, eventos recientes, o cualquier cosa fuera del ' +
+        'conocimiento de Coder. Devuelve un resumen y hasta 5 fuentes con su URL; usalas para responder, citando la fuente si corresponde.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Términos de búsqueda' },
+        },
+        required: ['query'],
+      },
+    },
+  },
 ];
 
 export const TERMINAL_TOOLS = ALL_TOOLS.filter(t => t.function.name === 'guardar_hecho');
