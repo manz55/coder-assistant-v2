@@ -77,6 +77,46 @@ function setState(state, label) {
 function setIdleConnected()    { setState('idle', 'mantené presionado para hablar'); }
 function setIdleDisconnected() { setState('idle', 'listo'); }
 
+// ── TTS via Web Speech API (browser-side, zero server cost) ──────────────────
+// Runs entirely on the user's device — no server RAM, no risk of tumbing
+// Render like the self-hosted Piper attempt did. If the browser doesn't
+// support it (or has no Spanish voice installed), it just silently doesn't
+// speak; the text response already rendered either way.
+
+const SPANISH_LANG_PRIORITY = ['es-AR', 'es-ES', 'es-MX'];
+
+function pickSpanishVoice() {
+  const voices = window.speechSynthesis.getVoices();
+  for (const lang of SPANISH_LANG_PRIORITY) {
+    const match = voices.find((v) => v.lang?.toLowerCase() === lang.toLowerCase());
+    if (match) return match;
+  }
+  return voices.find((v) => v.lang?.toLowerCase().startsWith('es')) ?? null;
+}
+
+function speakText(text) {
+  if (!('speechSynthesis' in window)) return;
+
+  try {
+    window.speechSynthesis.cancel(); // don't let turns overlap
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voice = pickSpanishVoice();
+    utterance.lang = voice?.lang ?? 'es-AR';
+    if (voice) utterance.voice = voice;
+
+    ttsPlaying = true;
+    setState('speaking', 'coder está hablando');
+    const finish = () => { ttsPlaying = false; if (!recording) setIdleConnected(); };
+    utterance.addEventListener('end', finish);
+    utterance.addEventListener('error', finish);
+
+    window.speechSynthesis.speak(utterance);
+  } catch (err) {
+    console.warn('[TTS] No se pudo leer la respuesta en voz alta:', err);
+    ttsPlaying = false;
+  }
+}
+
 function showToast(msg) {
   clearTimeout(toastTimer);
   toast.textContent = msg;
@@ -258,29 +298,13 @@ async function connectSession() {
         break;
       case 'text':
         appendTranscript(msg.content);
+        speakText(msg.content);
         break;
       case 'stt_result':
         pendingText = `Vos: ${msg.text}\n\nCoder: `;
         transcriptEl.textContent = pendingText;
         turnActive = true;
         break;
-      case 'audio_reply': {
-        // Plain <audio> playback — deliberately independent of audioCtx/mic
-        // setup, so TTS still plays even when the mic pipeline failed (or
-        // the user typed instead of talking).
-        const finish = () => { ttsPlaying = false; if (!recording) setIdleConnected(); };
-        try {
-          const audioEl = new Audio(`data:audio/wav;base64,${msg.data}`);
-          ttsPlaying = true;
-          setState('speaking', 'coder está hablando');
-          audioEl.addEventListener('ended', finish);
-          audioEl.addEventListener('error', finish);
-          audioEl.play().catch(finish);
-        } catch {
-          finish();
-        }
-        break;
-      }
       case 'content':
         showContent(msg);
         break;
@@ -338,6 +362,8 @@ function onSessionReady() {
 
 function disconnectSession() {
   if (recording) stopRecording();
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  ttsPlaying = false;
 
   ws?.close();
   ws = null;
@@ -390,6 +416,9 @@ function startRecording() {
     showToast('audio no disponible en este dispositivo');
     return;
   }
+
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  ttsPlaying = false;
 
   recording = true;
   btnTalk.classList.add('recording');
@@ -444,6 +473,9 @@ function sendTextInput(raw) {
     return;
   }
   if (recording) return;
+
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  ttsPlaying = false;
 
   pendingText = `Vos: ${text}\n\nCoder: `;
   transcriptEl.textContent = pendingText;
