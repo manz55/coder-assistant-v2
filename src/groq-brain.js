@@ -128,6 +128,24 @@ export const ALL_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'notificar_celular',
+      description:
+        'Manda una notificación push al celular de Joshua. ' +
+        'Usala cuando Joshua pida explícitamente que le avises algo al celular, o para avisarle que algo terminó ' +
+        '(una tarea larga, un análisis, etc.) cuando él lo haya pedido. No la uses para cosas triviales ni sin que la pida.',
+      parameters: {
+        type: 'object',
+        properties: {
+          titulo: { type: 'string', description: 'Título corto de la notificación' },
+          mensaje: { type: 'string', description: 'Cuerpo de la notificación' },
+        },
+        required: ['titulo', 'mensaje'],
+      },
+    },
+  },
 ];
 
 export const TERMINAL_TOOLS = ALL_TOOLS.filter(t => t.function.name === 'guardar_hecho');

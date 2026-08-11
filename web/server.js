@@ -56,6 +56,27 @@ async function searchUnsplashImages(query, count = 4) {
   }));
 }
 
+// notificar_celular — ntfy.sh push notifications, free, no API key, just a topic
+const NTFY_TOPIC = process.env.NTFY_TOPIC || null;
+
+if (!NTFY_TOPIC) {
+  console.warn('[ntfy] NTFY_TOPIC no configurada — notificar_celular fallará hasta que se agregue al .env');
+}
+
+async function sendNtfyNotification(titulo, mensaje) {
+  if (!NTFY_TOPIC) throw new Error('notificaciones no configuradas todavía — falta NTFY_TOPIC en el servidor');
+
+  // JSON publish (not the /<topic> + headers form) so tildes/ñ in titulo
+  // don't blow up as invalid HTTP header bytes — see ntfy.sh/docs/publish/#publish-as-json
+  const res = await fetch('https://ntfy.sh/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic: NTFY_TOPIC, title: titulo, message: mensaje }),
+  });
+
+  if (!res.ok) throw new Error(`ntfy.sh respondió ${res.status}`);
+}
+
 const MIME_BY_EXT = {
   sql: 'application/sql',
   csv: 'text/csv',
@@ -198,6 +219,18 @@ wss.on('connection', async (ws) => {
             result = { success: true, resultados };
           } catch (err) {
             console.error('[Tool] Error buscando en Unsplash:', err.message);
+            result = { success: false, error: err.message };
+          }
+        }
+
+        if (tc.function.name === 'notificar_celular') {
+          const { titulo, mensaje } = args;
+          try {
+            await sendNtfyNotification(titulo, mensaje);
+            console.log(`[Tool] Notificación mandada al celular: "${titulo}"`);
+            result = { success: true };
+          } catch (err) {
+            console.error('[Tool] Error mandando notificación:', err.message);
             result = { success: false, error: err.message };
           }
         }
