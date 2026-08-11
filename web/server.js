@@ -6,6 +6,8 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { networkInterfaces } from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import Groq, { toFile } from 'groq-sdk';
 import { PDFParse } from 'pdf-parse';
 import nodemailer from 'nodemailer';
@@ -336,6 +338,30 @@ async function exploreGithubRepo(groq, repo, pregunta) {
   };
 }
 
+// resumir_texto — same MAX_TOOL_CONTENT_CHARS discipline as everything else
+// that hands raw external text to Groq, plus a dedicated call so the
+// summary's tone (nivel) is consistent instead of depending on whatever the
+// main chat happens to do with it inline.
+async function summarizeText(groq, texto, nivel) {
+  const truncado = texto.length > MAX_TOOL_CONTENT_CHARS;
+  const preview = texto.slice(0, MAX_TOOL_CONTENT_CHARS);
+
+  const estilo = nivel === 'tecnico'
+    ? 'Mantené vocabulario técnico preciso, no simplifiques términos del dominio — asumí que el lector tiene conocimiento técnico.'
+    : 'Explicá en lenguaje simple y llano, sin jerga innecesaria, como si se lo explicaras a alguien sin conocimiento previo del tema.';
+
+  const response = await groq.chat.completions.create({
+    model: MODEL,
+    max_tokens: 500,
+    messages: [
+      { role: 'system', content: `Sos un asistente que resume textos en español de forma clara y concisa. ${estilo}` },
+      { role: 'user', content: `Resumí el siguiente texto${truncado ? ' (viene recortado, el original es más largo)' : ''}:\n\n${preview}` },
+    ],
+  });
+
+  return { resumen: response.choices[0]?.message?.content?.trim() || '(no se pudo generar el resumen)', truncado };
+}
+
 // buscar_web — Tavily search API (free tier: 1000 searches/month, no card)
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY || null;
 
@@ -460,6 +486,37 @@ function safeSend(ws, obj) {
   }
 }
 
+// controlar_volumen / controlar_brillo / abrir_app — same propose-then-confirm
+// flow as enviar_email above: the tool handler never runs anything, it just
+// builds a draft and shows it on screen. Only wss.on('connection')'s
+// system_command_confirm handler actually calls execFileAsync, and only
+// after Joshua approves the exact command shown to him.
+const execFileAsync = promisify(execFile);
+
+function draftSystemCommand(ws, tipo, descripcion, script) {
+  if (process.platform !== 'darwin') {
+    // Nothing to confirm if it can't possibly run — osascript doesn't exist
+    // outside macOS, so fail immediately instead of showing a dead-end panel.
+    throw new Error('esto solo funciona si el servidor corre en la Mac de Joshua (usa osascript, que no existe en este sistema)');
+  }
+  const draft = {
+    draftId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    tipo,
+    descripcion,
+    script,
+  };
+  safeSend(ws, { type: 'system_command_draft', draftId: draft.draftId, tipo, descripcion, comando: script });
+  return draft;
+}
+
+// Defense in depth for abrir_app's app name landing inside an AppleScript
+// string literal — the confirm panel already shows Joshua the exact command
+// before anything runs, but this keeps a crafted name from breaking out of
+// the string regardless.
+function escapeAppleScriptString(str) {
+  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 // Groq SDK errors carry status/error.code/error.type from the API response
 // (see node_modules/groq-sdk/core/error.js) — log all of it so a failure is
 // diagnosable from `render logs` alone, and turn it into a message that
@@ -497,6 +554,7 @@ function describeGroqError(err) {
 wss.on('connection', async (ws) => {
   console.log('[WS] Cliente conectado');
   let pendingEmailDraft = null;
+  let pendingSystemCommand = null;
   let recordedChunks = [];
 
   // Load context — fall back to defaults if Supabase is unavailable
@@ -579,6 +637,56 @@ wss.on('connection', async (ws) => {
           result = { success: true, status: 'esperando confirmación de Joshua en pantalla' };
         }
 
+        if (tc.function.name === 'controlar_volumen') {
+          try {
+            const nivel = Math.max(0, Math.min(100, Math.round(args.nivel)));
+            pendingSystemCommand = draftSystemCommand(
+              ws, 'volumen', `Poner el volumen al ${nivel}%`, `set volume output volume ${nivel}`
+            );
+            console.log(`[Tool] Comando propuesto — volumen a ${nivel}%`);
+            result = { success: true, status: 'esperando confirmación de Joshua en pantalla' };
+          } catch (err) {
+            console.error('[Tool] Error proponiendo comando de volumen:', err.message);
+            result = { success: false, error: err.message };
+          }
+        }
+
+        if (tc.function.name === 'controlar_brillo') {
+          try {
+            const { direccion } = args;
+            if (direccion !== 'subir' && direccion !== 'bajar') {
+              throw new Error('direccion tiene que ser "subir" o "bajar"');
+            }
+            // Sane ceiling — 16 taps is already well past the full brightness range.
+            const pasos = Math.max(1, Math.min(16, Math.round(args.pasos) || 1));
+            const keyCode = direccion === 'subir' ? 145 : 144; // standard macOS brightness key codes
+            const script = `tell application "System Events"\n${Array(pasos).fill(`key code ${keyCode}`).join('\ndelay 0.15\n')}\nend tell`;
+            pendingSystemCommand = draftSystemCommand(
+              ws, 'brillo', `${direccion === 'subir' ? 'Subir' : 'Bajar'} el brillo ${pasos} paso${pasos > 1 ? 's' : ''}`, script
+            );
+            console.log(`[Tool] Comando propuesto — brillo ${direccion} x${pasos}`);
+            result = { success: true, status: 'esperando confirmación de Joshua en pantalla' };
+          } catch (err) {
+            console.error('[Tool] Error proponiendo comando de brillo:', err.message);
+            result = { success: false, error: err.message };
+          }
+        }
+
+        if (tc.function.name === 'abrir_app') {
+          try {
+            const { nombre } = args;
+            const nombreSeguro = escapeAppleScriptString(nombre);
+            pendingSystemCommand = draftSystemCommand(
+              ws, 'abrir_app', `Abrir ${nombre}`, `tell application "${nombreSeguro}" to activate`
+            );
+            console.log(`[Tool] Comando propuesto — abrir "${nombre}"`);
+            result = { success: true, status: 'esperando confirmación de Joshua en pantalla' };
+          } catch (err) {
+            console.error('[Tool] Error proponiendo abrir app:', err.message);
+            result = { success: false, error: err.message };
+          }
+        }
+
         if (tc.function.name === 'buscar_imagen_stock') {
           try {
             const resultados = await searchUnsplashImages(args.busqueda);
@@ -603,6 +711,25 @@ wss.on('connection', async (ws) => {
             console.error('[Tool] Error mandando notificación:', err.message);
             result = { success: false, error: err.message };
           }
+        }
+
+        if (tc.function.name === 'cotizar_proyecto') {
+          const { tipo, detalles } = args;
+          console.log(`[Tool] Armando cotización — tipo: "${tipo}"`);
+          // No external call and nothing to fetch — Joshua's pricing already
+          // lives in the guardar_hecho facts injected into the system prompt.
+          // This just standardizes the output shape and, importantly, tells
+          // the model not to make up a price it doesn't actually know.
+          result = {
+            success: true,
+            tipo,
+            detalles: detalles || null,
+            instrucciones:
+              'Con los precios de Jzet Labs que ya sabés por los hechos guardados, armá la cotización lista para copiar ' +
+              'y mandarle a un cliente: saludo breve, qué incluye el servicio para este tipo de proyecto, precio, y un ' +
+              'cierre profesional invitando a confirmar. Concreto, sin relleno, en español. Si no sabés el precio de ' +
+              'este tipo específico de proyecto, decilo y pedile el dato a Joshua en vez de inventar un número.',
+          };
         }
 
         if (tc.function.name === 'leer_repo_github') {
@@ -662,6 +789,24 @@ wss.on('connection', async (ws) => {
             };
           } catch (err) {
             console.error('[Tool] Error buscando en la web:', err.message);
+            result = { success: false, error: err.message };
+          }
+        }
+
+        if (tc.function.name === 'resumir_texto') {
+          const { texto, nivel } = args;
+          try {
+            const { resumen, truncado } = await summarizeText(groq, texto, nivel);
+            console.log(`[Tool] Resumen generado (nivel: ${nivel || 'simple'}${truncado ? ', recortado' : ''})`);
+            result = {
+              success: true,
+              resumen,
+              ...(truncado ? {
+                nota: `el texto original tenía ${texto.length} caracteres, se usaron los primeros ${MAX_TOOL_CONTENT_CHARS} para el resumen — avisale a Joshua si el resumen parece incompleto`,
+              } : {}),
+            };
+          } catch (err) {
+            console.error('[Tool] Error resumiendo texto:', err.message);
             result = { success: false, error: err.message };
           }
         }
@@ -821,6 +966,29 @@ wss.on('connection', async (ws) => {
         } catch (err) {
           console.error('[Email] Error enviando:', err.message);
           safeSend(ws, { type: 'email_error', draftId: draft.draftId, message: err.message });
+        }
+      }
+
+      // User approved/rejected a controlar_volumen / controlar_brillo / abrir_app
+      // draft — the osascript only runs here, after explicit confirmation.
+      if (msg.type === 'system_command_confirm') {
+        if (!pendingSystemCommand || pendingSystemCommand.draftId !== msg.draftId) return;
+        const draft = pendingSystemCommand;
+        pendingSystemCommand = null;
+
+        if (!msg.approved) {
+          console.log('[Sistema] Comando cancelado por Joshua:', draft.descripcion);
+          safeSend(ws, { type: 'system_command_cancelled', draftId: draft.draftId });
+          return;
+        }
+
+        try {
+          await execFileAsync('osascript', ['-e', draft.script]);
+          console.log(`[Sistema] Ejecutado: ${draft.descripcion}`);
+          safeSend(ws, { type: 'system_command_done', draftId: draft.draftId, descripcion: draft.descripcion });
+        } catch (err) {
+          console.error('[Sistema] Error ejecutando comando:', err.message);
+          safeSend(ws, { type: 'system_command_error', draftId: draft.draftId, message: err.message });
         }
       }
 

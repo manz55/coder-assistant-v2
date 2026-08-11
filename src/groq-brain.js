@@ -236,6 +236,95 @@ export const ALL_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'controlar_volumen',
+      description:
+        'Propone poner el volumen de salida de la Mac de Joshua a un nivel específico. Como con enviar_email, esto ' +
+        'NUNCA se ejecuta directo — se le muestra a Joshua en pantalla y solo corre si él lo confirma ahí. ' +
+        'Después de invocarla, respondé solo algo breve como "te dejé la propuesta en pantalla, confirmá para aplicarla".',
+      parameters: {
+        type: 'object',
+        properties: {
+          nivel: { type: 'number', description: 'Nivel de volumen de 0 (mudo) a 100 (máximo)' },
+        },
+        required: ['nivel'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'controlar_brillo',
+      description:
+        'Propone subir o bajar el brillo de pantalla de la Mac de Joshua, simulando la tecla de brillo. Igual que ' +
+        'enviar_email, NUNCA se ejecuta directo — se muestra en pantalla y solo corre si Joshua lo confirma ahí. ' +
+        'Después de invocarla, respondé solo algo breve como "te dejé la propuesta en pantalla, confirmá para aplicarla".',
+      parameters: {
+        type: 'object',
+        properties: {
+          direccion: { type: 'string', description: 'Una de: subir, bajar' },
+          pasos: { type: 'integer', description: 'Cuántos pasos de brillo (opcional, default 1)' },
+        },
+        required: ['direccion'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'abrir_app',
+      description:
+        'Propone abrir/activar una aplicación en la Mac de Joshua por nombre. Igual que enviar_email, NUNCA se ' +
+        'ejecuta directo — se muestra en pantalla y solo corre si Joshua lo confirma ahí. ' +
+        'Después de invocarla, respondé solo algo breve como "te dejé la propuesta en pantalla, confirmá para abrirla".',
+      parameters: {
+        type: 'object',
+        properties: {
+          nombre: { type: 'string', description: 'Nombre exacto de la aplicación, ej. "Spotify", "Visual Studio Code"' },
+        },
+        required: ['nombre'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'cotizar_proyecto',
+      description:
+        'Arma una cotización lista para copiar y mandarle a un cliente de Jzet Labs, usando los precios que ya sabés ' +
+        'por los hechos guardados. Usala cuando Joshua pida cotizar, armar un presupuesto, o preparar un mensaje de ' +
+        'precio para un cliente. Si no sabés el precio de ese tipo específico de proyecto, decilo — nunca inventes un ' +
+        'número. Después de invocarla, escribí vos la cotización en el chat en formato de mensaje/email, lista para copiar.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tipo: { type: 'string', description: 'Tipo de proyecto, ej. "landing page", "sistema", "e-commerce"' },
+          detalles: { type: 'string', description: 'Detalles del pedido del cliente (alcance, extras, plazos, lo que haya dicho)' },
+        },
+        required: ['tipo'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'resumir_texto',
+      description:
+        'Resume un texto largo que Joshua pegó o que salió de otra tool (un archivo, una búsqueda, etc.), ajustando ' +
+        'la profundidad según nivel. Usala para textos largos en vez de resumirlos vos directo en el chat — así el ' +
+        'resumen sale de un paso dedicado y consistente.',
+      parameters: {
+        type: 'object',
+        properties: {
+          texto: { type: 'string', description: 'El texto completo a resumir' },
+          nivel: { type: 'string', description: 'Una de: simple (lenguaje llano, sin jerga), tecnico (mantiene vocabulario técnico preciso). Default: simple' },
+        },
+        required: ['texto'],
+      },
+    },
+  },
 ];
 
 export const TERMINAL_TOOLS = ALL_TOOLS.filter(t => t.function.name === 'guardar_hecho');

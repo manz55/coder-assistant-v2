@@ -561,6 +561,97 @@
 
     .email-btn-approve:hover { filter: brightness(1.15); }
 
+    /* ── SYSTEM COMMAND PANEL (controlar_volumen / controlar_brillo / abrir_app) ──
+       Same "needs confirmation" visual language as the email draft panel —
+       amber border, nothing runs until Joshua clicks Confirmar here. */
+
+    #command-panel {
+      display: none;
+      width: 100%;
+      flex-direction: column;
+      overflow: hidden;
+      border-color: rgba(245, 158, 11, 0.35);
+    }
+
+    #command-panel.show {
+      display: flex;
+      animation: panel-in 0.32s var(--ease-out) both;
+    }
+
+    #command-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      background: var(--glass-bg-raised);
+      border-bottom: 1px solid var(--glass-border);
+    }
+
+    #command-header .command-icon { display: flex; color: var(--warn-bright); }
+
+    #command-title {
+      flex: 1;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--warn-bright);
+    }
+
+    #command-close {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 5px;
+      border-radius: 4px;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    #command-close:hover { color: var(--text-bright); background: rgba(255,255,255,0.06); }
+
+    #command-body {
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .command-field {
+      display: flex;
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .command-label {
+      color: var(--text-dim);
+      min-width: 48px;
+      flex-shrink: 0;
+    }
+
+    .command-field > span:last-child { color: var(--text-bright); word-break: break-word; }
+
+    #command-script {
+      background: var(--code-bg);
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text-mid);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 140px;
+      overflow: auto;
+    }
+
+    #command-actions {
+      display: flex;
+      gap: 10px;
+      padding: 4px 18px 16px;
+    }
+
     /* ── FLOATING DOCK ───────────────────────────────────────────────────
        Single glass shell for session/talk/tools — previously three separate
        backdrop-filter surfaces (.input-dock, .toolbar, plus the bare session
@@ -783,6 +874,7 @@
     .icon-send             { width: 16px; height: 16px; }
     .icon-close             { width: 13px; height: 13px; }
     .icon-envelope           { width: 15px; height: 15px; }
+    .icon-terminal           { width: 15px; height: 15px; }
 
     #btn-cam.active {
       background: rgba(34, 197, 94, 0.14);
@@ -1011,6 +1103,26 @@
       <div id="email-actions">
         <button id="email-cancel" class="email-btn email-btn-cancel" type="button">Cancelar</button>
         <button id="email-approve" class="email-btn email-btn-approve" type="button">Enviar</button>
+      </div>
+    </div>
+
+    <div id="command-panel" class="panel">
+      <div id="command-header">
+        <span class="command-icon">
+          <svg class="svg-icon icon-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        </span>
+        <span id="command-title">Acción en tu Mac — esperando confirmación</span>
+        <button id="command-close" title="Cancelar">
+          <svg class="svg-icon icon-close" viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+        </button>
+      </div>
+      <div id="command-body">
+        <div class="command-field"><span class="command-label">Acción</span><span id="command-descripcion"></span></div>
+        <div id="command-script"></div>
+      </div>
+      <div id="command-actions">
+        <button id="command-cancel" class="email-btn email-btn-cancel" type="button">Cancelar</button>
+        <button id="command-approve" class="email-btn email-btn-approve" type="button">Confirmar</button>
       </div>
     </div>
 

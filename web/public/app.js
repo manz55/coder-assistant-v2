@@ -39,6 +39,12 @@ const emailContent  = document.getElementById('email-content');
 const emailClose    = document.getElementById('email-close');
 const emailCancel   = document.getElementById('email-cancel');
 const emailApprove  = document.getElementById('email-approve');
+const commandPanel      = document.getElementById('command-panel');
+const commandDescripcion = document.getElementById('command-descripcion');
+const commandScript     = document.getElementById('command-script');
+const commandClose      = document.getElementById('command-close');
+const commandCancel     = document.getElementById('command-cancel');
+const commandApprove    = document.getElementById('command-approve');
 
 let ws                 = null;
 let connected           = false;
@@ -318,6 +324,34 @@ emailClose.onclick  = () => respondEmailDraft(false);
 emailCancel.onclick = () => respondEmailDraft(false);
 emailApprove.onclick = () => respondEmailDraft(true);
 
+// ── System command confirmation (controlar_volumen / controlar_brillo / abrir_app) ──
+// Same never-without-a-click pattern as the email draft above — osascript
+// only runs server-side after approval here.
+
+let pendingCommandId = null;
+
+function showCommandDraft({ draftId, descripcion, comando }) {
+  pendingCommandId = draftId;
+  commandDescripcion.textContent = descripcion || '';
+  commandScript.textContent = comando || '';
+  commandPanel.classList.add('show');
+}
+
+function hideCommandDraft() {
+  commandPanel.classList.remove('show');
+  pendingCommandId = null;
+}
+
+function respondCommandDraft(approved) {
+  if (!pendingCommandId || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'system_command_confirm', draftId: pendingCommandId, approved }));
+  if (!approved) hideCommandDraft();
+}
+
+commandClose.onclick   = () => respondCommandDraft(false);
+commandCancel.onclick  = () => respondCommandDraft(false);
+commandApprove.onclick = () => respondCommandDraft(true);
+
 // ── Audio playback (output goes through analyser → speakers) ─────────────────
 
 function scheduleAudio(base64) {
@@ -435,6 +469,21 @@ async function connectSession() {
         hideEmailDraft();
         showToast(`error mandando email  ·  ${msg.message.slice(0, 50)}`);
         break;
+      case 'system_command_draft':
+        showCommandDraft(msg);
+        break;
+      case 'system_command_done':
+        hideCommandDraft();
+        showToast(`listo  ·  ${msg.descripcion}`);
+        break;
+      case 'system_command_cancelled':
+        hideCommandDraft();
+        showToast('acción cancelada');
+        break;
+      case 'system_command_error':
+        hideCommandDraft();
+        showToast(`error  ·  ${msg.message.slice(0, 50)}`);
+        break;
       case 'fact_saved':
         triggerSpark();
         showToast(`memoricé algo nuevo  ·  ${msg.category}`);
@@ -497,6 +546,7 @@ function disconnectSession() {
 
   if (cameraActive) stopCamera();
   hideEmailDraft();
+  hideCommandDraft();
   hideImageResults();
   clearTranscript();
 
