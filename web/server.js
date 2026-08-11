@@ -5,7 +5,12 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { networkInterfaces } from 'node:os';
-import Groq from 'groq-sdk';
+import { spawn } from 'node:child_process';
+import { access, mkdir, unlink, chmod } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
+import Groq, { toFile } from 'groq-sdk';
 import { PDFParse } from 'pdf-parse';
 import nodemailer from 'nodemailer';
 import { getSystemPrompt, getRelevantFacts, saveFact } from '../src/memory.js';
@@ -118,6 +123,148 @@ async function readGithubFile(repo, ruta) {
   return Buffer.from(data.content, 'base64').toString('utf-8');
 }
 
+// Push-to-talk STT — the client's AudioWorklet (processor.js) already
+// downsamples the mic to mono 16 kHz PCM16 before streaming it over, so all
+// that's left server-side is to wrap the raw samples in a WAV header and
+// hand them to Groq's Whisper endpoint.
+const STT_SAMPLE_RATE = 16000;
+const STT_MIN_BYTES = STT_SAMPLE_RATE * 2 * 0.3; // ~0.3s — below this, treat as an accidental tap, not speech
+
+function pcm16ToWav(pcmBuffer, sampleRate = STT_SAMPLE_RATE, numChannels = 1) {
+  const bytesPerSample = 2;
+  const blockAlign = numChannels * bytesPerSample;
+  const header = Buffer.alloc(44);
+
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(36 + pcmBuffer.length, 4);
+  header.write('WAVE', 8, 'ascii');
+  header.write('fmt ', 12, 'ascii');
+  header.writeUInt32LE(16, 16); // fmt chunk size (PCM)
+  header.writeUInt16LE(1, 20);  // audio format = PCM
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * blockAlign, 28); // byte rate
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bytesPerSample * 8, 34); // bits per sample
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(pcmBuffer.length, 40);
+
+  return Buffer.concat([header, pcmBuffer]);
+}
+
+async function transcribeAudio(groq, pcmBuffer) {
+  const wav = pcm16ToWav(pcmBuffer);
+  const file = await toFile(wav, 'audio.wav', { type: 'audio/wav' });
+
+  const transcription = await groq.audio.transcriptions.create({
+    file,
+    model: 'whisper-large-v3-turbo',
+    language: 'es',
+    response_format: 'json',
+  });
+
+  return transcription.text?.trim() ?? '';
+}
+
+// TTS — Piper, self-hosted, Spanish voice. Groq's hosted TTS (Orpheus, née
+// playai-tts) only does English/Arabic, so it's out for a Spanish-speaking
+// assistant. Piper's official releases (rhasspy/piper) have been
+// unmaintained since Nov 2023 and its macOS tarballs are missing their
+// dylibs, but the linux_x86_64 build — what Render actually runs — is intact
+// and this is a pure-binary approach, so it doesn't need Python on Render.
+//
+// Voice: es_MX-ald-medium (Latin American Spanish, medium quality — the
+// Argentine es_AR-daniela voice only ships in "high", a noticeably bigger
+// network; went with medium here to keep RAM use down on Render's plan).
+const VENDOR_DIR = join(__dirname, '..', 'vendor', 'piper');
+const PIPER_EXTRACT_DIR = join(VENDOR_DIR, 'piper');
+const PIPER_BIN = join(PIPER_EXTRACT_DIR, 'piper');
+const PIPER_ESPEAK_DATA = join(PIPER_EXTRACT_DIR, 'espeak-ng-data');
+const PIPER_VOICE_ONNX = join(VENDOR_DIR, 'es_MX-ald-medium.onnx');
+const PIPER_VOICE_JSON = join(VENDOR_DIR, 'es_MX-ald-medium.onnx.json');
+const PIPER_SAMPLE_RATE = 22050; // from es_MX-ald-medium.onnx.json's "audio.sample_rate"
+
+const PIPER_RELEASE_URL = 'https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz';
+const PIPER_VOICE_BASE_URL = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/ald/medium';
+
+async function fileExists(path) {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function downloadToFile(url, destPath) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`descarga falló (${res.status}): ${url}`);
+  await pipeline(Readable.fromWeb(res.body), createWriteStream(destPath));
+}
+
+async function setupPiper() {
+  try {
+    await mkdir(VENDOR_DIR, { recursive: true });
+
+    if (!(await fileExists(PIPER_BIN))) {
+      console.log('[Piper] Descargando binario (linux x86_64, ~25MB)...');
+      const tarPath = join(VENDOR_DIR, 'piper.tar.gz');
+      await downloadToFile(PIPER_RELEASE_URL, tarPath);
+
+      await new Promise((resolve, reject) => {
+        const tar = spawn('tar', ['xzf', tarPath, '-C', VENDOR_DIR]);
+        tar.on('error', reject);
+        tar.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`tar salió con código ${code}`))));
+      });
+
+      await unlink(tarPath).catch(() => {});
+      await chmod(PIPER_BIN, 0o755).catch(() => {});
+    }
+
+    if (!(await fileExists(PIPER_VOICE_ONNX))) {
+      console.log('[Piper] Descargando voz es_MX-ald-medium (~63MB)...');
+      await downloadToFile(`${PIPER_VOICE_BASE_URL}/es_MX-ald-medium.onnx`, PIPER_VOICE_ONNX);
+      await downloadToFile(`${PIPER_VOICE_BASE_URL}/es_MX-ald-medium.onnx.json`, PIPER_VOICE_JSON);
+    }
+
+    console.log('[Piper] Listo — TTS disponible');
+    return true;
+  } catch (err) {
+    console.warn('[Piper] Setup falló — Coder se va a quedar sin voz de salida, pero el chat de texto sigue funcionando:', err.message);
+    return false;
+  }
+}
+
+// Kicked off once at server startup, non-blocking — the app serves text/STT
+// immediately either way; synthesizeSpeech() awaits this the first time it's called.
+const piperReadyPromise = setupPiper();
+
+async function synthesizeSpeech(text) {
+  const ready = await piperReadyPromise;
+  if (!ready) throw new Error('Piper no está disponible en este servidor');
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn(
+      PIPER_BIN,
+      ['--model', PIPER_VOICE_ONNX, '--espeak_data', PIPER_ESPEAK_DATA, '--output_raw'],
+      { cwd: PIPER_EXTRACT_DIR, env: { ...process.env, LD_LIBRARY_PATH: PIPER_EXTRACT_DIR } }
+    );
+
+    const chunks = [];
+    let stderr = '';
+    proc.stdout.on('data', (c) => chunks.push(c));
+    proc.stderr.on('data', (c) => { stderr += c.toString(); });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      if (code !== 0) return reject(new Error(`piper salió con código ${code}: ${stderr.slice(0, 300)}`));
+      resolve(pcm16ToWav(Buffer.concat(chunks), PIPER_SAMPLE_RATE));
+    });
+
+    proc.stdin.write(text);
+    proc.stdin.end();
+  });
+}
+
 const MIME_BY_EXT = {
   sql: 'application/sql',
   csv: 'text/csv',
@@ -175,6 +322,7 @@ function describeGroqError(err) {
 wss.on('connection', async (ws) => {
   console.log('[WS] Cliente conectado');
   let pendingEmailDraft = null;
+  let recordedChunks = [];
 
   // Load context — fall back to defaults if Supabase is unavailable
   let systemPrompt = 'Sos Coder, el asistente personal de Joshua. Hablás en español rioplatense, sos directo e inteligente.';
@@ -307,7 +455,17 @@ wss.on('connection', async (ws) => {
     const text = choice.message.content ?? '';
     chatHistory.push({ role: 'assistant', content: text });
 
-    if (text) safeSend(ws, { type: 'text', content: text });
+    if (text) {
+      safeSend(ws, { type: 'text', content: text });
+
+      try {
+        const wav = await synthesizeSpeech(text);
+        safeSend(ws, { type: 'audio_reply', data: wav.toString('base64') });
+      } catch (err) {
+        console.warn('[Piper] No se pudo generar audio:', err.message);
+      }
+    }
+
     safeSend(ws, { type: 'status', text: 'listening' });
   }
 
@@ -394,7 +552,43 @@ wss.on('connection', async (ws) => {
         }
       }
 
-      // audio, audio_end, video: ignored until STT/TTS is wired up
+      // Push-to-talk: raw 16 kHz PCM16 chunks stream in while the button is
+      // held, then audio_end triggers transcription + the normal chat flow.
+      if (msg.type === 'audio' && msg.data) {
+        recordedChunks.push(Buffer.from(msg.data, 'base64'));
+      }
+
+      if (msg.type === 'audio_end') {
+        const pcm = Buffer.concat(recordedChunks);
+        recordedChunks = [];
+
+        if (pcm.length < STT_MIN_BYTES) {
+          // Accidental tap, not speech — nothing worth sending to Whisper.
+          safeSend(ws, { type: 'status', text: 'listening' });
+        } else {
+          try {
+            const text = await transcribeAudio(groq, pcm);
+
+            if (!text) {
+              safeSend(ws, { type: 'text', content: '(no escuché nada — probá de nuevo)' });
+              safeSend(ws, { type: 'status', text: 'listening' });
+            } else {
+              safeSend(ws, { type: 'stt_result', text });
+              try {
+                await runGroq(text);
+              } catch (err) {
+                safeSend(ws, { type: 'text', content: describeGroqError(err) });
+                safeSend(ws, { type: 'status', text: 'listening' });
+              }
+            }
+          } catch (err) {
+            safeSend(ws, { type: 'text', content: describeGroqError(err) });
+            safeSend(ws, { type: 'status', text: 'listening' });
+          }
+        }
+      }
+
+      // video: ignored — camera frames are context-only, never trigger a response by themselves
     } catch (err) {
       console.error('[WS] Error procesando mensaje del cliente:', err.message);
     }

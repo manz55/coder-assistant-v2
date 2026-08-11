@@ -43,6 +43,7 @@ let micSource          = null;
 let micAnalyserNode    = null;
 let playTime           = 0;
 let toastTimer         = null;
+let ttsPlaying         = false;
 
 // Push-to-talk: the mic MediaStream + AudioContext live for the whole
 // session, but the worklet that actually forwards audio to the WebSocket is
@@ -248,7 +249,7 @@ async function connectSession() {
           onSessionReady();
         } else if (msg.text === 'listening') {
           turnActive = false;
-          if (!recording) setIdleConnected();
+          if (!recording && !ttsPlaying) setIdleConnected();
         }
         break;
       case 'audio':
@@ -258,6 +259,28 @@ async function connectSession() {
       case 'text':
         appendTranscript(msg.content);
         break;
+      case 'stt_result':
+        pendingText = `Vos: ${msg.text}\n\nCoder: `;
+        transcriptEl.textContent = pendingText;
+        turnActive = true;
+        break;
+      case 'audio_reply': {
+        // Plain <audio> playback — deliberately independent of audioCtx/mic
+        // setup, so TTS still plays even when the mic pipeline failed (or
+        // the user typed instead of talking).
+        const finish = () => { ttsPlaying = false; if (!recording) setIdleConnected(); };
+        try {
+          const audioEl = new Audio(`data:audio/wav;base64,${msg.data}`);
+          ttsPlaying = true;
+          setState('speaking', 'coder está hablando');
+          audioEl.addEventListener('ended', finish);
+          audioEl.addEventListener('error', finish);
+          audioEl.play().catch(finish);
+        } catch {
+          finish();
+        }
+        break;
+      }
       case 'content':
         showContent(msg);
         break;
