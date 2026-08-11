@@ -77,6 +77,47 @@ async function sendNtfyNotification(titulo, mensaje) {
   if (!res.ok) throw new Error(`ntfy.sh respondió ${res.status}`);
 }
 
+// leer_repo_github — public GitHub Contents API; GITHUB_TOKEN is optional and
+// only needed to read private repos (public ones work with zero config).
+const GITHUB_OWNER = 'manz55';
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
+
+if (!GITHUB_TOKEN) {
+  console.warn('[GitHub] GITHUB_TOKEN no configurado — leer_repo_github solo va a poder leer repos públicos');
+}
+
+async function readGithubFile(repo, ruta) {
+  // Encode each path segment (spaces, accents, etc.) without touching the slashes.
+  const encodedPath = ruta.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${repo}/contents/${encodedPath}`;
+
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'coder-assistant' };
+  if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
+
+  const res = await fetch(url, { headers });
+
+  if (res.status === 404) {
+    throw new Error(`no encontré "${ruta}" en el repo "${repo}" (puede no existir, o ser un repo privado sin GITHUB_TOKEN configurado)`);
+  }
+  if (!res.ok) {
+    throw new Error(`GitHub respondió ${res.status}`);
+  }
+
+  const data = await res.json();
+
+  if (Array.isArray(data)) {
+    throw new Error(`"${ruta}" es una carpeta, no un archivo — pasá la ruta de un archivo específico`);
+  }
+  if (data.type !== 'file') {
+    throw new Error(`"${ruta}" no es un archivo`);
+  }
+  if (!data.content) {
+    throw new Error(`"${ruta}" es demasiado grande para leerlo así (límite ~1MB de la API de contenidos de GitHub)`);
+  }
+
+  return Buffer.from(data.content, 'base64').toString('utf-8');
+}
+
 const MIME_BY_EXT = {
   sql: 'application/sql',
   csv: 'text/csv',
@@ -231,6 +272,18 @@ wss.on('connection', async (ws) => {
             result = { success: true };
           } catch (err) {
             console.error('[Tool] Error mandando notificación:', err.message);
+            result = { success: false, error: err.message };
+          }
+        }
+
+        if (tc.function.name === 'leer_repo_github') {
+          const { repo, ruta } = args;
+          try {
+            const contenido = await readGithubFile(repo, ruta);
+            console.log(`[Tool] Leído ${repo}/${ruta} de GitHub (${contenido.length} caracteres)`);
+            result = { success: true, contenido: contenido.slice(0, 60000) };
+          } catch (err) {
+            console.error('[Tool] Error leyendo repo de GitHub:', err.message);
             result = { success: false, error: err.message };
           }
         }

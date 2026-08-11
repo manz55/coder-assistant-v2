@@ -146,6 +146,23 @@ export const ALL_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'leer_repo_github',
+      description:
+        'Lee el contenido de un archivo de uno de los repos de GitHub de Joshua (github.com/manz55), ' +
+        'sin depender de que esté en su Mac. Usala cuando pida ver, revisar o analizar un archivo de un repo por nombre y ruta.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Nombre del repositorio, ej. "coder-assistant-v2"' },
+          ruta: { type: 'string', description: 'Ruta del archivo dentro del repo, ej. "src/index.js"' },
+        },
+        required: ['repo', 'ruta'],
+      },
+    },
+  },
 ];
 
 export const TERMINAL_TOOLS = ALL_TOOLS.filter(t => t.function.name === 'guardar_hecho');
