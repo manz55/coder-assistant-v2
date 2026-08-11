@@ -551,11 +551,21 @@ wss.on('connection', async (ws) => {
             const parser = new PDFParse({ data: buffer });
             const { text } = await parser.getText();
             await parser.destroy();
-            const preview = text.slice(0, 60000);
-            userContent = `[PDF adjunto: ${msg.filename}]\n\`\`\`\n${preview}\n\`\`\``;
+            const preview = text.slice(0, MAX_TOOL_CONTENT_CHARS);
+            // Unlike a tool result (which can carry a separate `nota` field
+            // the model reads on its own), this becomes the user turn's raw
+            // content — the truncation notice has to live inline in the text
+            // itself so Coder actually sees it and can mention it.
+            const nota = text.length > MAX_TOOL_CONTENT_CHARS
+              ? `\n\n(este PDF tiene ${text.length} caracteres en total, pero solo se cargaron los primeros ${MAX_TOOL_CONTENT_CHARS} — avisale a Joshua que estás viendo solo una parte y, si necesita el resto, pedile que te diga qué sección específica)`
+              : '';
+            userContent = `[PDF adjunto: ${msg.filename}]\n\`\`\`\n${preview}\n\`\`\`${nota}`;
           } else if (msg.mimeType === 'text/plain' && msg.text != null) {
-            const preview = msg.text.slice(0, 60000);
-            userContent = `[Archivo adjunto: ${msg.filename}]\n\`\`\`\n${preview}\n\`\`\``;
+            const preview = msg.text.slice(0, MAX_TOOL_CONTENT_CHARS);
+            const nota = msg.text.length > MAX_TOOL_CONTENT_CHARS
+              ? `\n\n(este archivo tiene ${msg.text.length} caracteres en total, pero solo se cargaron los primeros ${MAX_TOOL_CONTENT_CHARS} — avisale a Joshua que estás viendo solo una parte y, si necesita el resto, pedile que te diga qué sección específica)`
+              : '';
+            userContent = `[Archivo adjunto: ${msg.filename}]\n\`\`\`\n${preview}\n\`\`\`${nota}`;
           } else if (msg.mimeType === 'image/jpeg') {
             userContent = `[Imagen adjunta: ${msg.filename}] (en modo texto no puedo ver imágenes — describila vos si querés que la analice)`;
           }
