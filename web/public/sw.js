@@ -2,7 +2,7 @@
 // thing that forces browsers with an old SW already installed (Safari,
 // Android Chrome) to fetch the new files instead of serving stale ones
 // from cache forever.
-const CACHE_VERSION = 'v15';
+const CACHE_VERSION = 'v16';
 const CACHE = `coder-cache-${CACHE_VERSION}`;
 
 const STATIC = [
@@ -11,6 +11,7 @@ const STATIC = [
   '/app.js',
   '/processor.js',
   '/robot.js',
+  '/particles.js',
   '/audio-analyser.js',
   '/coder.webp',
   '/manifest.json',

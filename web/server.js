@@ -448,6 +448,9 @@ wss.on('connection', async (ws) => {
               timeZone: 'America/Guatemala',
             });
             console.log(`[Tool] Recordatorio creado: "${mensaje}" para ${legible}`);
+            // Same one-line pattern as fact_saved — just a trigger for the
+            // frontend's "recordando" visual, no other behavior change.
+            safeSend(ws, { type: 'reminder_created', mensaje, fecha_hora_legible: legible });
             result = { success: true, mensaje, fecha_hora_legible: legible };
           } catch (err) {
             console.error('[Tool] Error creando recordatorio:', err.message);

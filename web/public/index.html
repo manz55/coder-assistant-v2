@@ -76,37 +76,12 @@
       100% { transform: scale(1.18) translateY(-2%); opacity: 1; }
     }
 
+    /* Depth-of-field particle field — canvas injected by particles.js */
     .particles {
       position: fixed;
       inset: 0;
-      overflow: hidden;
       pointer-events: none;
       z-index: -1;
-    }
-
-    .particles span {
-      position: absolute;
-      bottom: -5%;
-      width: 3px;
-      height: 3px;
-      border-radius: 50%;
-      background: var(--accent-bright);
-      opacity: 0;
-      filter: blur(1px);
-      animation: particle-float linear infinite;
-    }
-
-    .particles span:nth-child(1) { left: 12%; width: 2px; height: 2px; animation-duration: 23s; animation-delay: 0s; }
-    .particles span:nth-child(2) { left: 30%; animation-duration: 29s; animation-delay: 4s; }
-    .particles span:nth-child(3) { left: 55%; width: 2px; height: 2px; animation-duration: 25s; animation-delay: 9s; }
-    .particles span:nth-child(4) { left: 72%; animation-duration: 33s; animation-delay: 2s; }
-    .particles span:nth-child(5) { left: 88%; width: 2px; height: 2px; animation-duration: 27s; animation-delay: 13s; }
-
-    @keyframes particle-float {
-      0%   { transform: translate(0, 0); opacity: 0; }
-      12%  { opacity: 0.4; }
-      88%  { opacity: 0.15; }
-      100% { transform: translate(18px, -108vh); opacity: 0; }
     }
 
     .app-shell {
@@ -133,8 +108,11 @@
 
     #robot-container {
       position: relative;
-      width: 260px;
-      height: 260px;
+      /* Scales with the viewport but never overflows a small phone screen
+         and caps out at 340px (the canvas's internal render resolution,
+         see robot.js) on anything wider. */
+      width: min(340px, 78vw);
+      height: min(340px, 78vw);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -234,13 +212,14 @@
     }
 
     #content-close {
+      display: flex;
+      align-items: center;
+      justify-content: center;
       background: transparent;
       border: none;
       color: var(--text-dim);
-      font-size: 16px;
-      line-height: 1;
       cursor: pointer;
-      padding: 2px 6px;
+      padding: 5px;
       border-radius: 4px;
       transition: color 0.15s, background 0.15s;
     }
@@ -287,7 +266,7 @@
       border-bottom: 1px solid var(--panel-border);
     }
 
-    #email-header .email-icon { font-size: 14px; }
+    #email-header .email-icon { display: flex; color: var(--warn-bright); }
 
     #email-title {
       flex: 1;
@@ -297,13 +276,14 @@
     }
 
     #email-close {
+      display: flex;
+      align-items: center;
+      justify-content: center;
       background: transparent;
       border: none;
       color: var(--text-dim);
-      font-size: 16px;
-      line-height: 1;
       cursor: pointer;
-      padding: 2px 6px;
+      padding: 5px;
       border-radius: 4px;
       transition: color 0.15s, background 0.15s;
     }
@@ -438,6 +418,10 @@
     .talk-area.enter { animation: panel-in 0.4s var(--ease-out) both; }
 
     #btn-talk {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
       background: var(--panel);
       border: 1.5px solid var(--panel-border);
       color: var(--text-bright);
@@ -506,6 +490,9 @@
     }
 
     #btn-send {
+      display: flex;
+      align-items: center;
+      justify-content: center;
       background: var(--panel);
       border: 1.5px solid var(--panel-border);
       color: var(--text-mid);
@@ -513,7 +500,6 @@
       height: 42px;
       flex-shrink: 0;
       border-radius: 50%;
-      font-size: 15px;
       cursor: pointer;
       transition: border-color 0.15s, color 0.15s, background 0.15s;
     }
@@ -550,12 +536,29 @@
     .icon-btn:hover { background: var(--panel-active); color: var(--text-bright); transform: translateY(-1px); }
     .icon-btn:active { transform: translateY(0) scale(0.96); }
 
-    .icon-btn .icon { font-size: 17px; line-height: 1; }
     .icon-btn .label {
       font-size: 8.5px;
       letter-spacing: 0.06em;
       text-transform: uppercase;
     }
+
+    /* ── SVG ICON SET — one consistent style everywhere, no emoji ──────── */
+
+    .svg-icon {
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      display: block;
+      flex-shrink: 0;
+    }
+
+    .icon-btn .svg-icon  { width: 20px; height: 20px; }
+    .icon-mic             { width: 15px; height: 15px; }
+    .icon-send             { width: 16px; height: 16px; }
+    .icon-close             { width: 13px; height: 13px; }
+    .icon-envelope           { width: 15px; height: 15px; }
 
     #btn-cam.active {
       background: rgba(34, 197, 94, 0.14);
@@ -687,9 +690,7 @@
 </head>
 <body>
 
-  <div class="particles" aria-hidden="true">
-    <span></span><span></span><span></span><span></span><span></span>
-  </div>
+  <div class="particles" aria-hidden="true"></div>
 
   <div class="app-shell">
     <span class="wordmark">Coder / Asistente</span>
@@ -707,16 +708,22 @@
       <div id="content-header">
         <span id="content-title"></span>
         <span id="content-badge"></span>
-        <button id="content-close" title="Cerrar">✕</button>
+        <button id="content-close" title="Cerrar">
+          <svg class="svg-icon icon-close" viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+        </button>
       </div>
       <pre id="content-body"></pre>
     </div>
 
     <div id="email-panel" class="panel">
       <div id="email-header">
-        <span class="email-icon">✉️</span>
+        <span class="email-icon">
+          <svg class="svg-icon icon-envelope" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+        </span>
         <span id="email-title">Borrador de email — esperando confirmación</span>
-        <button id="email-close" title="Cancelar">✕</button>
+        <button id="email-close" title="Cancelar">
+          <svg class="svg-icon icon-close" viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+        </button>
       </div>
       <div id="email-body">
         <div class="email-field"><span class="email-label">Para</span><span id="email-to"></span></div>
@@ -733,21 +740,26 @@
       <button id="btn-session">Conectar con Coder</button>
 
       <div id="talk-area" class="talk-area" hidden>
-        <button id="btn-talk" title="Mantené presionado para hablar">🎙️ Mantené presionado para hablar</button>
+        <button id="btn-talk" title="Mantené presionado para hablar">
+          <svg class="svg-icon icon-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+          Mantené presionado para hablar
+        </button>
 
         <form id="text-form" class="text-form">
           <textarea id="text-input" placeholder="o escribí acá…" autocomplete="off" maxlength="4000" rows="1"></textarea>
-          <button id="btn-send" type="submit" title="Enviar">➤</button>
+          <button id="btn-send" type="submit" title="Enviar">
+            <svg class="svg-icon icon-send" viewBox="0 0 24 24"><path d="M4 12 20 4l-6.5 16-2.7-6.8L4 12Z"/></svg>
+          </button>
         </form>
       </div>
 
       <div class="toolbar">
         <button id="btn-cam" class="icon-btn" title="Activar cámara">
-          <span class="icon">📷</span>
+          <svg class="svg-icon icon" viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 1 2-2h1.5l1-1.5h7l1 1.5H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z"/><circle cx="12" cy="13" r="3.5"/></svg>
           <span class="label">cámara</span>
         </button>
         <button id="btn-file" class="icon-btn" title="Enviar archivo">
-          <span class="icon">📎</span>
+          <svg class="svg-icon icon" viewBox="0 0 24 24"><path d="M16.5 6.5 8.7 14.3a3 3 0 1 0 4.24 4.24l7.07-7.07a5 5 0 1 0-7.07-7.07L5.5 11.84a7 7 0 0 0 9.9 9.9"/></svg>
           <span class="label">archivo</span>
         </button>
       </div>

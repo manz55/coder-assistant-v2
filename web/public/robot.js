@@ -4,8 +4,8 @@ import { getRMSLevel } from './audio-analyser.js';
 // per-frame control over an irregular boundary and audio-driven distortion,
 // which reads as mechanical with pure CSS transforms.
 
-const SIZE   = 260; // logical (CSS) px — canvas backing store scales by DPR
-const CORE_R = 34;
+const SIZE   = 340; // logical (CSS) px — canvas backing store scales by DPR
+const CORE_R = 46;
 const N_PTS  = 10;  // points around the blob boundary
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -42,8 +42,13 @@ export function initRobot(container) {
   container.innerHTML = '';
 
   canvas = document.createElement('canvas');
-  canvas.style.width  = SIZE + 'px';
-  canvas.style.height = SIZE + 'px';
+  // CSS-scaled to fill #robot-container (sized responsively via clamp() in
+  // index.html) — the internal SIZE backing store stays fixed, so it's
+  // always crisp whether the container renders smaller on a phone or full
+  // size on desktop.
+  canvas.style.width  = '100%';
+  canvas.style.height = '100%';
+  canvas.style.display = 'block';
   const dpr = window.devicePixelRatio || 1;
   canvas.width  = SIZE * dpr;
   canvas.height = SIZE * dpr;
@@ -60,7 +65,7 @@ export function setOutAnalyser(node) { _outNode = node; }
 
 export function setState(s) {
   _state = s;
-  if (s === 'idle' || s === 'connecting') {
+  if (s !== 'listening' && s !== 'speaking') {
     micLvl = 0;
     outLvl = 0;
   }
@@ -141,10 +146,18 @@ function render(t) {
   micLvl += (micTarget - micLvl) * 0.18;
   outLvl += (outTarget - outLvl) * 0.28;
 
+  const isThinking = _state === 'thinking' || _state === 'connecting';
+
   const idlePulse = (Math.sin(t * 0.5) + 1) / 2; // smooth, never linear
-  const base   = 0.16 + idlePulse * 0.08;
+  const base = 0.16 + idlePulse * 0.08;
+
+  // Thinking gets its own rhythm — faster and layered with a second harmonic
+  // so it reads as "working," not just a sped-up idle breath.
+  const thinkPulse = (Math.sin(t * 2.3) * 0.5 + Math.sin(t * 3.9 + 1.3) * 0.5 + 1) / 2;
+
   const energy = _state === 'listening' ? base + micLvl * 0.95
                : _state === 'speaking'  ? base + outLvl * 0.85
+               : isThinking             ? 0.16 + thinkPulse * 0.24
                : base;
 
   const isError = _state === 'error';
@@ -182,7 +195,13 @@ function render(t) {
     ? 2 + outLvl * 11
     : _state === 'listening'
       ? 2 + micLvl * 9
-      : 1.5;
+      : isThinking
+        ? 4.5
+        : 1.5;
+
+  // Thinking's boundary noise runs ~2.6x faster than idle's — same shape of
+  // motion, clearly busier tempo, so it never reads as "idle but bigger."
+  const wobbleFreq = isThinking ? 2.6 : 1;
 
   const points = [];
   for (let i = 0; i < N_PTS; i++) {
@@ -191,8 +210,8 @@ function render(t) {
     if (waveform) {
       target = waveform[i] * wobbleAmp;
     } else {
-      const n1 = Math.sin(t * 0.7 + i * 1.8);
-      const n2 = Math.sin(t * 1.4 + i * 3.2 + 10);
+      const n1 = Math.sin(t * 0.7 * wobbleFreq + i * 1.8);
+      const n2 = Math.sin(t * 1.4 * wobbleFreq + i * 3.2 + 10);
       target = (n1 * 0.6 + n2 * 0.4) * wobbleAmp;
     }
     // Ease toward the new target rather than snapping — smooths both the

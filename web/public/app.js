@@ -1,4 +1,5 @@
-import { initRobot, setState as robotSetState, setMicAnalyser, setOutAnalyser, triggerSpark } from './robot.js';
+import { initRobot, setState as robotSetState, setMicAnalyser as robotSetMicAnalyser, setOutAnalyser as robotSetOutAnalyser, triggerSpark as robotTriggerSpark } from './robot.js';
+import { initParticles, setState as particlesSetState, setMicAnalyser as particlesSetMicAnalyser, setOutAnalyser as particlesSetOutAnalyser, triggerSpark as particlesTriggerSpark } from './particles.js';
 import { createAnalyser } from './audio-analyser.js';
 
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -61,8 +62,14 @@ let cameraActive   = false;
 // Gemini Live outputs PCM16 mono at 24 kHz
 const GEMINI_OUT_RATE = 24000;
 
-// ── Init robot ────────────────────────────────────────────────────────────────
+// ── Init robot + particle field ─────────────────────────────────────────────
 initRobot(document.getElementById('robot-container'));
+initParticles(document.querySelector('.particles'));
+
+// Fan out to both visual modules together so every call site stays a single call.
+function setMicAnalyser(node) { robotSetMicAnalyser(node); particlesSetMicAnalyser(node); }
+function setOutAnalyser(node) { robotSetOutAnalyser(node); particlesSetOutAnalyser(node); }
+function triggerSpark() { robotTriggerSpark(); particlesTriggerSpark(); }
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 
@@ -70,8 +77,9 @@ function setState(state, label) {
   statusEl.textContent = label;
   statusEl.className   = state === 'error'
     ? 'err'
-    : ['listening', 'speaking', 'connecting'].includes(state) ? 'live' : '';
+    : ['listening', 'speaking', 'connecting', 'thinking'].includes(state) ? 'live' : '';
   robotSetState(state);
+  particlesSetState(state);
 }
 
 function setIdleConnected()    { setState('idle', 'mantené presionado para hablar'); }
@@ -330,6 +338,10 @@ async function connectSession() {
         triggerSpark();
         showToast(`memoricé algo nuevo  ·  ${msg.category}`);
         break;
+      case 'reminder_created':
+        triggerSpark();
+        showToast(`recordatorio guardado  ·  ${msg.fecha_hora_legible}`);
+        break;
       case 'file_received':
         hideCooking();
         btnFile.classList.remove('uploading');
@@ -447,7 +459,7 @@ function stopRecording() {
 
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'audio_end' }));
-    setState('connecting', 'procesando...');
+    setState('thinking', 'procesando...');
   } else {
     setIdleConnected();
   }
@@ -482,7 +494,7 @@ function sendTextInput(raw) {
   turnActive = true;
 
   ws.send(JSON.stringify({ type: 'text_input', text }));
-  setState('connecting', 'procesando...');
+  setState('thinking', 'procesando...');
 }
 
 textForm.addEventListener('submit', (e) => {
