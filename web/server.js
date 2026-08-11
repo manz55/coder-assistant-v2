@@ -108,6 +108,13 @@ async function checkDueReminders() {
 checkDueReminders();
 setInterval(checkDueReminders, REMINDER_CHECK_INTERVAL_MS);
 
+// Shared cap for anything that stuffs raw external text into a tool result
+// bound for Groq. 60,000 chars used to be the ceiling here, but that's well
+// past what fits in a single request on the free-tier TPM limit for
+// openai/gpt-oss-120b — Groq rejects the whole request with a 413 instead of
+// just answering with less context, so this needs to stay conservative.
+const MAX_TOOL_CONTENT_CHARS = 20000;
+
 // leer_repo_github — public GitHub Contents API; GITHUB_TOKEN is optional and
 // only needed to read private repos (public ones work with zero config).
 const GITHUB_OWNER = 'manz55';
@@ -175,14 +182,26 @@ async function searchWeb(query) {
   if (!res.ok) throw new Error(`Tavily respondió ${res.status}`);
 
   const data = await res.json();
-  return {
-    respuesta: data.answer ?? null,
-    resultados: (data.results ?? []).map((r) => ({
-      titulo: r.title,
-      url: r.url,
-      resumen: r.content,
-    })),
-  };
+
+  // Same risk as leer_repo_github: five verbose results plus a synthesized
+  // answer can add up to more than the free-tier TPM limit on a single Groq
+  // request. Cap conservatively per-field instead of trusting the total —
+  // 5 × 3000 + 4000 stays safely under MAX_TOOL_CONTENT_CHARS.
+  const RESUMEN_MAX = 3000;
+  const RESPUESTA_MAX = 4000;
+  let truncado = false;
+
+  const respuestaCompleta = data.answer ?? null;
+  if (respuestaCompleta && respuestaCompleta.length > RESPUESTA_MAX) truncado = true;
+  const respuesta = respuestaCompleta?.slice(0, RESPUESTA_MAX) ?? null;
+
+  const resultados = (data.results ?? []).map((r) => {
+    const contenido = r.content ?? '';
+    if (contenido.length > RESUMEN_MAX) truncado = true;
+    return { titulo: r.title, url: r.url, resumen: contenido.slice(0, RESUMEN_MAX) };
+  });
+
+  return { respuesta, resultados, truncado };
 }
 
 // Push-to-talk STT — the client's AudioWorklet (processor.js) already
@@ -279,6 +298,13 @@ function describeGroqError(err) {
   );
 
   if (status === 401) return '(Groq rechazó la API key — revisá GROQ_API_KEY en las variables de entorno del servidor)';
+  // Groq returns 413 (sometimes bundled under a generic rate_limit_exceeded
+  // code) when a single request's tokens blow past the free-tier TPM limit
+  // — most often a big file or search result stuffed into tool content, even
+  // after the MAX_TOOL_CONTENT_CHARS caps, since tokens ≠ characters 1:1.
+  if (status === 413 || /too large/i.test(apiMessage)) {
+    return '(ese archivo o resultado es muy grande para leerlo de una — pedime una parte específica en vez de todo junto)';
+  }
   if (status === 429) return '(límite de uso de Groq alcanzado — esperá un momento y probá de nuevo)';
   if (code === 'model_decommissioned' || code === 'model_not_found') {
     return `(el modelo "${MODEL}" no está disponible en Groq — hay que actualizar MODEL en src/groq-brain.js)`;
@@ -404,7 +430,14 @@ wss.on('connection', async (ws) => {
           try {
             const contenido = await readGithubFile(repo, ruta);
             console.log(`[Tool] Leído ${repo}/${ruta} de GitHub (${contenido.length} caracteres)`);
-            result = { success: true, contenido: contenido.slice(0, 60000) };
+            const truncado = contenido.length > MAX_TOOL_CONTENT_CHARS;
+            result = {
+              success: true,
+              contenido: contenido.slice(0, MAX_TOOL_CONTENT_CHARS),
+              ...(truncado ? {
+                nota: `este archivo tiene ${contenido.length} caracteres en total, pero solo se cargaron los primeros ${MAX_TOOL_CONTENT_CHARS} — avisale a Joshua que estás viendo solo una parte y, si necesita el resto, pedile que te diga qué sección específica`,
+              } : {}),
+            };
           } catch (err) {
             console.error('[Tool] Error leyendo repo de GitHub:', err.message);
             result = { success: false, error: err.message };
@@ -413,9 +446,16 @@ wss.on('connection', async (ws) => {
 
         if (tc.function.name === 'buscar_web') {
           try {
-            const { respuesta, resultados } = await searchWeb(args.query);
-            console.log(`[Tool] Tavily "${args.query}": ${resultados.length} resultados`);
-            result = { success: true, respuesta, resultados };
+            const { respuesta, resultados, truncado } = await searchWeb(args.query);
+            console.log(`[Tool] Tavily "${args.query}": ${resultados.length} resultados${truncado ? ' (recortados)' : ''}`);
+            result = {
+              success: true,
+              respuesta,
+              resultados,
+              ...(truncado ? {
+                nota: 'algunos resultados o la respuesta sintetizada venían muy largos y se recortaron — avisale a Joshua si parece que falta contexto y ofrecele buscar algo más específico',
+              } : {}),
+            };
           } catch (err) {
             console.error('[Tool] Error buscando en la web:', err.message);
             result = { success: false, error: err.message };
