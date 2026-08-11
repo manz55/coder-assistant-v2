@@ -38,6 +38,15 @@
       --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
       --font-mono:    'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
       --ease-out:     cubic-bezier(0.16, 1, 0.3, 1);
+      --spring:       cubic-bezier(0.34, 1.56, 0.64, 1);
+
+      /* Glassmorphism surfaces — translucent enough that the blurred
+         particle field behind shows through as soft color, not just a
+         lighter grey box. */
+      --glass-bg:        rgba(22, 22, 33, 0.5);
+      --glass-bg-raised: rgba(30, 30, 44, 0.58);
+      --glass-border:    rgba(255, 255, 255, 0.09);
+      --glass-blur:      24px;
     }
 
     html, body { height: 100%; }
@@ -138,20 +147,26 @@
 
     .panel {
       width: 100%;
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      border-radius: 14px;
+      background: var(--glass-bg);
+      backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+      border: 1px solid var(--glass-border);
+      border-radius: 22px;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 10px 34px rgba(0, 0, 0, 0.32);
     }
 
     #transcript {
       width: 100%;
-      min-height: 64px;
-      max-height: 220px;
+      min-height: 170px;
+      max-height: 380px;
       overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
       font-size: 14px;
-      line-height: 1.65;
+      line-height: 1.6;
       color: var(--text-bright);
-      padding: 16px 18px;
+      padding: 20px;
       scrollbar-width: thin;
       scrollbar-color: var(--panel-border) transparent;
     }
@@ -159,7 +174,53 @@
     #transcript:empty::before {
       content: 'decí algo o escribí para empezar';
       color: var(--text-dim);
+      margin: auto; /* centers the placeholder in the now-taller empty panel */
     }
+
+    /* Chat bubbles — built by app.js, one per turn per speaker */
+    .msg {
+      max-width: 86%;
+      padding: 10px 14px;
+      border-radius: 16px;
+      font-size: 14px;
+      line-height: 1.6;
+      word-break: break-word;
+      white-space: pre-wrap;
+      animation: msg-in 0.35s var(--ease-out) both;
+    }
+
+    @keyframes msg-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .msg::before {
+      content: attr(data-label);
+      display: block;
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      opacity: 0.55;
+    }
+
+    .msg-user {
+      align-self: flex-end;
+      background: rgba(99, 102, 241, 0.16);
+      border: 1px solid rgba(99, 102, 241, 0.24);
+      border-bottom-right-radius: 5px;
+    }
+
+    .msg-user::before { color: var(--accent-bright); text-align: right; }
+
+    .msg-coder {
+      align-self: flex-start;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-bottom-left-radius: 5px;
+    }
+
+    .msg-coder::before { color: var(--text-dim); }
 
     /* ── CONTENT PANEL (mostrar_contenido) ───────────────────── */
 
@@ -185,8 +246,8 @@
       align-items: center;
       gap: 10px;
       padding: 12px 16px;
-      background: var(--panel-raised);
-      border-bottom: 1px solid var(--panel-border);
+      background: var(--glass-bg-raised);
+      border-bottom: 1px solid var(--glass-border);
     }
 
     #content-title {
@@ -262,8 +323,8 @@
       align-items: center;
       gap: 10px;
       padding: 12px 16px;
-      background: var(--panel-raised);
-      border-bottom: 1px solid var(--panel-border);
+      background: var(--glass-bg-raised);
+      border-bottom: 1px solid var(--glass-border);
     }
 
     #email-header .email-icon { display: flex; color: var(--warn-bright); }
@@ -417,58 +478,64 @@
     .talk-area[hidden] { display: none; }
     .talk-area.enter { animation: panel-in 0.4s var(--ease-out) both; }
 
+    /* Floating glass pill dock — mic, text input and send all in one shell */
+    .input-dock {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      width: 100%;
+      padding: 5px;
+      background: var(--glass-bg);
+      backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+      border: 1px solid var(--glass-border);
+      border-radius: 30px;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.07) inset, 0 10px 30px rgba(0, 0, 0, 0.3);
+      transition: border-color 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out);
+    }
+
+    .input-dock:focus-within {
+      border-color: rgba(99, 102, 241, 0.38);
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset, 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 0 3px rgba(99, 102, 241, 0.1);
+    }
+
     #btn-talk {
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 9px;
-      background: var(--panel);
-      border: 1.5px solid var(--panel-border);
-      color: var(--text-bright);
-      padding: 16px 40px;
-      border-radius: 999px;
-      font-family: inherit;
-      font-size: 12px;
-      font-weight: 600;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
+      flex-shrink: 0;
+      width: 44px;
+      height: 44px;
+      background: transparent;
+      border: none;
+      border-radius: 50%;
+      color: var(--text-mid);
       cursor: pointer;
       touch-action: none;
-      transition: border-color 0.15s, color 0.15s, box-shadow 0.15s, background 0.15s, transform 0.15s var(--ease-out);
+      transition: color 0.15s, background 0.15s, box-shadow 0.15s, transform 0.15s var(--ease-out);
     }
 
     #btn-talk:hover:not(.recording) {
-      border-color: var(--accent);
-      transform: translateY(-1px);
-      box-shadow: 0 0 18px rgba(99, 102, 241, 0.14);
+      background: var(--panel-active);
+      color: var(--text-bright);
     }
 
     #btn-talk.recording {
-      background: rgba(239, 68, 68, 0.14);
-      border-color: var(--err);
+      background: rgba(239, 68, 68, 0.18);
       color: var(--err-bright);
-      box-shadow: 0 0 26px rgba(239, 68, 68, 0.22);
-      transform: scale(1.04);
-    }
-
-    .text-form {
-      display: flex;
-      gap: 8px;
-      width: 100%;
-      align-items: flex-end;
+      box-shadow: 0 0 22px rgba(239, 68, 68, 0.3);
+      transform: scale(1.08);
     }
 
     #text-input {
       flex: 1;
-      background: var(--panel);
-      border: 1.5px solid var(--panel-border);
+      background: transparent;
+      border: none;
       color: var(--text-bright);
-      padding: 11px 16px;
-      border-radius: 20px;
+      padding: 12px 6px;
       font-family: inherit;
       font-size: 16px;
       outline: none;
-      transition: border-color 0.15s;
       min-width: 0;
       resize: none;
       overflow-y: hidden;
@@ -477,10 +544,11 @@
       line-height: 1.45;
       user-select: text;
       -webkit-user-select: text;
+      /* Smooth grow as app.js adjusts style.height on input, instead of snapping */
+      transition: height 0.15s var(--ease-out);
     }
 
     #text-input::placeholder { color: var(--text-dim); }
-    #text-input:focus { border-color: var(--accent); }
     #text-input:disabled { opacity: 0.5; }
 
     /* Allow text selection in all content areas */
@@ -493,19 +561,19 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      background: var(--panel);
-      border: 1.5px solid var(--panel-border);
+      background: var(--panel-active);
+      border: none;
       color: var(--text-mid);
-      width: 42px;
-      height: 42px;
+      width: 40px;
+      height: 40px;
       flex-shrink: 0;
+      margin-bottom: 2px;
       border-radius: 50%;
       cursor: pointer;
-      transition: border-color 0.15s, color 0.15s, background 0.15s;
+      transition: color 0.15s, background 0.15s, transform 0.15s var(--ease-out);
     }
 
-    #btn-send { transition: border-color 0.15s, color 0.15s, background 0.15s, transform 0.15s var(--ease-out); }
-    #btn-send:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-bright); transform: translateY(-1px) scale(1.05); }
+    #btn-send:hover:not(:disabled) { background: var(--accent); color: #fff; transform: scale(1.06); }
     #btn-send:disabled { opacity: 0.4; cursor: default; }
 
     .toolbar {
@@ -630,14 +698,17 @@
       position: fixed;
       bottom: 24px;
       right: 24px;
-      width: 150px;
-      height: 112px;
-      border-radius: 8px;
-      border: 1.5px solid var(--success);
+      width: 160px;
+      height: 120px;
+      border-radius: 22px;
+      border: 1.5px solid rgba(255, 255, 255, 0.16);
       object-fit: cover;
       transform: scaleX(-1);
-      box-shadow: 0 0 20px rgba(34,197,94,0.18), 0 4px 16px rgba(0,0,0,0.5);
-      transition: border-color 0.3s;
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.12) inset,
+        0 0 26px rgba(34, 197, 94, 0.2),
+        0 12px 32px rgba(0, 0, 0, 0.45);
+      transition: border-color 0.3s, box-shadow 0.3s;
     }
 
     /* ── DROP OVERLAY ────────────────────────────────────────── */
@@ -667,25 +738,32 @@
 
     #toast {
       position: fixed;
-      bottom: 28px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: var(--panel-raised);
-      border: 1px solid var(--panel-border);
-      padding: 9px 20px;
+      top: 20px;
+      right: 20px;
+      background: var(--glass-bg-raised);
+      backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+      border: 1px solid var(--glass-border);
+      padding: 10px 18px;
       border-radius: 999px;
       font-size: 11px;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.06em;
       color: var(--accent-bright);
       opacity: 0;
       pointer-events: none;
-      transform: translate(-50%, 6px);
-      transition: opacity 0.25s var(--ease-out), transform 0.25s var(--ease-out);
+      transform: translate(14px, -8px) scale(0.92);
+      /* Fade is a plain ease; the move+scale uses an overshoot curve for a
+         light spring-in instead of a flat slide. */
+      transition: opacity 0.3s var(--ease-out), transform 0.55s var(--spring);
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: min(320px, calc(100vw - 40px));
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.09) inset, 0 10px 30px rgba(0, 0, 0, 0.4);
       z-index: 300;
     }
 
-    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+    #toast.show { opacity: 1; transform: translate(0, 0) scale(1); }
   </style>
 </head>
 <body>
@@ -740,12 +818,13 @@
       <button id="btn-session">Conectar con Coder</button>
 
       <div id="talk-area" class="talk-area" hidden>
-        <button id="btn-talk" title="Mantené presionado para hablar">
-          <svg class="svg-icon icon-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
-          Mantené presionado para hablar
-        </button>
-
-        <form id="text-form" class="text-form">
+        <form id="text-form" class="input-dock">
+          <!-- type="button" is load-bearing: without it this button defaults
+               to type="submit" now that it's inside the form, and releasing
+               a push-to-talk press would submit an empty message. -->
+          <button id="btn-talk" type="button" title="Mantené presionado para hablar">
+            <svg class="svg-icon icon-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+          </button>
           <textarea id="text-input" placeholder="o escribí acá…" autocomplete="off" maxlength="4000" rows="1"></textarea>
           <button id="btn-send" type="submit" title="Enviar">
             <svg class="svg-icon icon-send" viewBox="0 0 24 24"><path d="M4 12 20 4l-6.5 16-2.7-6.8L4 12Z"/></svg>

@@ -132,22 +132,44 @@ function showToast(msg) {
   toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
 }
 
-let pendingText = '';
-let turnActive  = false;
+let turnActive    = false;
+let coderBubbleEl = null;
+let coderText     = '';
+
+// One glass bubble per speaker per turn, instead of one blob of concatenated
+// text — same data (still just whatever the server sends), different DOM.
+function addBubble(who, text) {
+  const bubble = document.createElement('div');
+  bubble.className = `msg msg-${who}`;
+  bubble.dataset.label = who === 'user' ? 'Vos' : 'Coder';
+  bubble.textContent = text;
+  transcriptEl.appendChild(bubble);
+  return bubble;
+}
+
+function startUserTurn(text) {
+  clearTranscript();
+  addBubble('user', text);
+  coderBubbleEl = addBubble('coder', '');
+  coderText = '';
+  turnActive = true;
+}
 
 function appendTranscript(chunk) {
-  if (!turnActive) {
+  if (!turnActive || !coderBubbleEl) {
     clearTranscript();
+    coderBubbleEl = addBubble('coder', '');
     turnActive = true;
   }
-  pendingText += chunk;
-  transcriptEl.textContent = pendingText.slice(-400);
+  coderText += chunk;
+  coderBubbleEl.textContent = coderText.slice(-400);
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
 
 function clearTranscript() {
-  pendingText = '';
-  transcriptEl.textContent = '';
+  transcriptEl.innerHTML = '';
+  coderBubbleEl = null;
+  coderText = '';
 }
 
 function setTextDisabled(disabled) {
@@ -309,9 +331,7 @@ async function connectSession() {
         speakText(msg.content);
         break;
       case 'stt_result':
-        pendingText = `Vos: ${msg.text}\n\nCoder: `;
-        transcriptEl.textContent = pendingText;
-        turnActive = true;
+        startUserTurn(msg.text);
         break;
       case 'content':
         showContent(msg);
@@ -489,9 +509,7 @@ function sendTextInput(raw) {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   ttsPlaying = false;
 
-  pendingText = `Vos: ${text}\n\nCoder: `;
-  transcriptEl.textContent = pendingText;
-  turnActive = true;
+  startUserTurn(text);
 
   ws.send(JSON.stringify({ type: 'text_input', text }));
   setState('thinking', 'procesando...');
