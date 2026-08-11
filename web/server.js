@@ -124,15 +124,18 @@ if (!GITHUB_TOKEN) {
   console.warn('[GitHub] GITHUB_TOKEN no configurado — leer_repo_github solo va a poder leer repos públicos');
 }
 
+function githubHeaders() {
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'coder-assistant' };
+  if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
+  return headers;
+}
+
 async function readGithubFile(repo, ruta) {
   // Encode each path segment (spaces, accents, etc.) without touching the slashes.
   const encodedPath = ruta.split('/').filter(Boolean).map(encodeURIComponent).join('/');
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${repo}/contents/${encodedPath}`;
 
-  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'coder-assistant' };
-  if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
-
-  const res = await fetch(url, { headers });
+  const res = await fetch(url, { headers: githubHeaders() });
 
   if (res.status === 404) {
     throw new Error(`no encontré "${ruta}" en el repo "${repo}" (puede no existir, o ser un repo privado sin GITHUB_TOKEN configurado)`);
@@ -154,6 +157,183 @@ async function readGithubFile(repo, ruta) {
   }
 
   return Buffer.from(data.content, 'base64').toString('utf-8');
+}
+
+// explorar_repo_github — walks a whole repo instead of one file at a time:
+// list the tree, keep the ~15 most relevant files, read + summarize each one
+// individually (one small Groq call per file, never the raw content of more
+// than one file in a single request), then synthesize those summaries into
+// one final answer. This is the only way to cover a whole repo without
+// blowing past the same per-request TPM limit that MAX_TOOL_CONTENT_CHARS
+// exists for above — a giant single request with N files concatenated would
+// hit the exact 413 that started that fix.
+const EXPLORE_MAX_FILES = 15;
+
+const EXPLORE_EXCLUDE_DIR_SEGMENTS = new Set([
+  'node_modules', '.git', 'dist', 'build', '.next', '.nuxt', 'vendor',
+  'coverage', '.cache', 'out', '.turbo', '.vercel', '__pycache__',
+]);
+
+const EXPLORE_EXCLUDE_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.bmp',
+  '.pdf', '.zip', '.tar', '.gz', '.woff', '.woff2', '.ttf', '.otf', '.eot',
+  '.mp3', '.mp4', '.mov', '.avi', '.wav', '.flac',
+  '.lock', '.map',
+]);
+
+// Named lock files whose actual extension (.json/.yaml) doesn't give them
+// away — huge, auto-generated, zero signal for an architecture summary.
+const EXPLORE_EXCLUDE_FILENAMES = new Set([
+  'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'composer.lock', 'gemfile.lock',
+]);
+
+const EXPLORE_MAX_FILE_BYTES = 300 * 1024; // not worth an API round trip if it's this big
+
+function isExplorableFile(entry) {
+  const path = entry.path;
+  if (path.split('/').some((s) => EXPLORE_EXCLUDE_DIR_SEGMENTS.has(s))) return false;
+
+  const base = path.split('/').pop().toLowerCase();
+  if (EXPLORE_EXCLUDE_FILENAMES.has(base)) return false;
+  if (base.includes('.min.')) return false;
+
+  const ext = base.includes('.') ? '.' + base.split('.').pop() : '';
+  if (EXPLORE_EXCLUDE_EXTENSIONS.has(ext)) return false;
+
+  if (typeof entry.size === 'number' && entry.size > EXPLORE_MAX_FILE_BYTES) return false;
+
+  return true;
+}
+
+const EXPLORE_HIGH_PRIORITY_NAMES = /^(readme(\.\w+)?|package\.json|pyproject\.toml|requirements\.txt|go\.mod|cargo\.toml|composer\.json|gemfile|pom\.xml)$/i;
+const EXPLORE_MAIN_CODE_PREFIXES = ['src/', 'app/', 'lib/', 'pages/', 'components/', 'api/'];
+
+function explorePriorityOf(path) {
+  const base = path.split('/').pop();
+  if (EXPLORE_HIGH_PRIORITY_NAMES.test(base)) return 0;
+  if (!path.includes('/')) return 1; // other top-level files (configs) next
+  if (EXPLORE_MAIN_CODE_PREFIXES.some((p) => path.startsWith(p))) return 2;
+  return 3;
+}
+
+// Highest priority first, shallower paths first within a tier — the goal is
+// "what would a human open first to understand this repo", not full coverage.
+function prioritizeExploreFiles(entries, max) {
+  const explorable = entries.filter(isExplorableFile);
+  const sorted = [...explorable].sort((a, b) => {
+    const pa = explorePriorityOf(a.path), pb = explorePriorityOf(b.path);
+    if (pa !== pb) return pa - pb;
+    const depthDiff = a.path.split('/').length - b.path.split('/').length;
+    if (depthDiff !== 0) return depthDiff;
+    return a.path.localeCompare(b.path);
+  });
+  return { seleccionados: sorted.slice(0, max), total: explorable.length };
+}
+
+async function fetchRepoTree(repo) {
+  const repoRes = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${repo}`, { headers: githubHeaders() });
+  if (repoRes.status === 404) {
+    throw new Error(`no encontré el repo "${repo}" (puede no existir, o ser privado sin GITHUB_TOKEN configurado)`);
+  }
+  if (!repoRes.ok) throw new Error(`GitHub respondió ${repoRes.status} buscando el repo "${repo}"`);
+  const repoData = await repoRes.json();
+  const branch = repoData.default_branch || 'main';
+
+  const treeRes = await fetch(
+    `https://api.github.com/repos/${GITHUB_OWNER}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
+    { headers: githubHeaders() }
+  );
+  if (!treeRes.ok) throw new Error(`GitHub respondió ${treeRes.status} listando los archivos de "${repo}"`);
+  const treeData = await treeRes.json();
+  if (treeData.truncated) {
+    console.warn(`[Explorar] El árbol de "${repo}" vino truncado por la API de GitHub (repo muy grande) — puede faltar algún archivo`);
+  }
+
+  return (treeData.tree ?? []).filter((entry) => entry.type === 'blob');
+}
+
+// One small, focused Groq call per file — never more than one file's raw
+// content in a single request, and a short max_tokens keeps each call fast.
+async function summarizeExploredFile(groq, path, contenido, pregunta) {
+  const truncado = contenido.length > MAX_TOOL_CONTENT_CHARS;
+  const preview = contenido.slice(0, MAX_TOOL_CONTENT_CHARS);
+
+  const instruccion = pregunta
+    ? `Un usuario está explorando un repo buscando específicamente: "${pregunta}". Del archivo de abajo, extraé en 3-5 líneas SOLO lo relevante a esa pregunta — si no hay nada relevante, decilo en una sola línea.`
+    : 'Resumí en 3-5 líneas qué hace este archivo, su rol en el proyecto, y cualquier tecnología o patrón notable.';
+
+  const response = await groq.chat.completions.create({
+    model: MODEL,
+    max_tokens: 220,
+    messages: [
+      { role: 'system', content: 'Sos un asistente que resume archivos de código de forma breve y concreta, en español. No repitas código literal, parafraseá.' },
+      { role: 'user', content: `${instruccion}\n\nArchivo: ${path}${truncado ? ' (contenido recortado, el archivo completo es más largo)' : ''}\n\`\`\`\n${preview}\n\`\`\`` },
+    ],
+  });
+
+  return response.choices[0]?.message?.content?.trim() || '(sin contenido para resumir)';
+}
+
+// Consolidates every per-file summary into one final answer. If this one
+// call fails (e.g. hits a transient rate limit right at the end), we still
+// have every individual summary — falling back to those beats losing the
+// whole exploration over the very last request.
+async function synthesizeRepoExploration(groq, repo, resumenes, pregunta) {
+  const cuerpo = resumenes
+    .map((r) => `### ${r.path}${r.error ? ` (no se pudo leer: ${r.error})` : ''}\n${r.resumen ?? ''}`)
+    .join('\n\n');
+
+  const instruccion = pregunta
+    ? `Basándote en estos resúmenes de archivos del repo "${repo}", respondé específicamente: "${pregunta}". Si ningún archivo tiene información relevante, decilo con claridad.`
+    : `Basándote en estos resúmenes de archivos del repo "${repo}", armá un resumen general: qué hace el proyecto, su arquitectura principal, y el stack tecnológico. Sintetizá, no repitas los resúmenes tal cual.`;
+
+  try {
+    const response = await groq.chat.completions.create({
+      model: MODEL,
+      max_tokens: 700,
+      messages: [
+        { role: 'system', content: 'Sos un asistente técnico que sintetiza resúmenes de archivos de un repo en una conclusión clara, en español.' },
+        { role: 'user', content: `${instruccion}\n\n${cuerpo}` },
+      ],
+    });
+    return response.choices[0]?.message?.content?.trim() || cuerpo;
+  } catch (err) {
+    console.error('[Explorar] Error consolidando el resumen final, devolviendo resúmenes parciales:', err.message);
+    return cuerpo;
+  }
+}
+
+// Only step that can throw all the way up to the caller — nothing has been
+// read yet at that point, so there's no partial work to lose. From here on,
+// every failure (a single file, or even the final synthesis) is caught and
+// folded into the result instead of aborting the whole exploration.
+async function exploreGithubRepo(groq, repo, pregunta) {
+  const allFiles = await fetchRepoTree(repo);
+  const { seleccionados, total } = prioritizeExploreFiles(allFiles, EXPLORE_MAX_FILES);
+
+  const resumenes = [];
+  for (const entry of seleccionados) {
+    try {
+      const contenido = await readGithubFile(repo, entry.path);
+      const resumen = await summarizeExploredFile(groq, entry.path, contenido, pregunta);
+      resumenes.push({ path: entry.path, resumen });
+      console.log(`[Explorar] ${repo}/${entry.path} resumido`);
+    } catch (err) {
+      console.error(`[Explorar] Error en ${repo}/${entry.path}, sigo con el resto:`, err.message);
+      resumenes.push({ path: entry.path, error: err.message });
+    }
+  }
+
+  const resumen = resumenes.length
+    ? await synthesizeRepoExploration(groq, repo, resumenes, pregunta)
+    : 'No se pudo leer ningún archivo del repo.';
+
+  return {
+    archivosExplorados: seleccionados.length,
+    archivosTotales: total,
+    archivosConError: resumenes.filter((r) => r.error).map((r) => r.path),
+    resumen,
+  };
 }
 
 // buscar_web — Tavily search API (free tier: 1000 searches/month, no card)
@@ -440,6 +620,30 @@ wss.on('connection', async (ws) => {
             };
           } catch (err) {
             console.error('[Tool] Error leyendo repo de GitHub:', err.message);
+            result = { success: false, error: err.message };
+          }
+        }
+
+        if (tc.function.name === 'explorar_repo_github') {
+          const { repo, pregunta } = args;
+          try {
+            const { archivosExplorados, archivosTotales, archivosConError, resumen } =
+              await exploreGithubRepo(groq, repo, pregunta || null);
+            console.log(`[Tool] Exploré "${repo}": ${archivosExplorados}/${archivosTotales} archivos${archivosConError.length ? `, ${archivosConError.length} con error` : ''}`);
+            const hayMas = archivosTotales > archivosExplorados;
+            result = {
+              success: true,
+              repo,
+              archivos_explorados: archivosExplorados,
+              archivos_totales: archivosTotales,
+              resumen,
+              ...(archivosConError.length ? { archivos_con_error: archivosConError } : {}),
+              ...(hayMas ? {
+                nota: `este repo tiene ${archivosTotales} archivos relevantes en total, pero por límite de seguridad solo se exploraron los ${archivosExplorados} más importantes — avisale a Joshua que hay más disponibles por si quiere profundizar en algo puntual (con leer_repo_github para un archivo específico)`,
+              } : {}),
+            };
+          } catch (err) {
+            console.error(`[Tool] Error explorando repo "${repo}" de GitHub:`, err.message);
             result = { success: false, error: err.message };
           }
         }

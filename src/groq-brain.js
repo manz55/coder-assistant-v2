@@ -166,6 +166,32 @@ export const ALL_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'explorar_repo_github',
+      description:
+        'Explora un repo entero de GitHub de Joshua (github.com/manz55) sin que tengas que pedir archivo por archivo: ' +
+        'lista los archivos, prioriza los más relevantes (README, manifest de dependencias como package.json, y el código ' +
+        'principal en src/app/lib/pages/components), los lee y resume uno por uno, y al final te da una síntesis del ' +
+        'repo entero — arquitectura, qué hace, stack tecnológico — o, si mandás "pregunta", una respuesta enfocada en eso ' +
+        'específico. Tarda bastante más que leer_repo_github porque hace varias lecturas y resúmenes en cadena, así que ' +
+        'usala cuando Joshua pida un panorama general o "revisá/explorá el repo X" — si ya sabés el archivo puntual que ' +
+        'necesitás, usá leer_repo_github en cambio, es mucho más rápido. Por límite de seguridad explora como máximo 15 ' +
+        'archivos; si el repo tiene más, te lo va a avisar en la respuesta para que se lo digas a Joshua.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Nombre del repositorio, ej. "coder-assistant-v2"' },
+          pregunta: {
+            type: 'string',
+            description: 'Opcional — qué buscar específicamente en el repo (ej. "cómo maneja la autenticación"). Si no la mandás, hace un resumen general del repo.',
+          },
+        },
+        required: ['repo'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'buscar_web',
       description:
         'Busca información actual en internet — noticias, precios, eventos recientes, o cualquier cosa fuera del ' +
