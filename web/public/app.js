@@ -26,6 +26,11 @@ const contentTitle  = document.getElementById('content-title');
 const contentBadge  = document.getElementById('content-badge');
 const contentBody   = document.getElementById('content-body');
 const contentClose  = document.getElementById('content-close');
+const imagePanel    = document.getElementById('image-panel');
+const imageTitle    = document.getElementById('image-title');
+const imageGrid     = document.getElementById('image-grid');
+const imageClose    = document.getElementById('image-close');
+const scrollLatest  = document.getElementById('scroll-latest');
 const emailPanel    = document.getElementById('email-panel');
 const emailTitle    = document.getElementById('email-title');
 const emailTo       = document.getElementById('email-to');
@@ -138,6 +143,8 @@ let coderText     = '';
 
 // One glass bubble per speaker per turn, instead of one blob of concatenated
 // text — same data (still just whatever the server sends), different DOM.
+// The transcript now keeps every turn for the whole session (only cleared on
+// connect/disconnect) so past replies stay scrollable instead of vanishing.
 function addBubble(who, text) {
   const bubble = document.createElement('div');
   bubble.className = `msg msg-${who}`;
@@ -147,29 +154,60 @@ function addBubble(who, text) {
   return bubble;
 }
 
+// Placeholder bubble shown the instant a turn starts, swapped for the real
+// text as soon as it arrives — same three-dot pattern as #cooking's dots.
+function addTypingBubble() {
+  const bubble = document.createElement('div');
+  bubble.className = 'msg msg-coder msg-typing';
+  bubble.dataset.label = 'Coder';
+  bubble.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span>';
+  transcriptEl.appendChild(bubble);
+  return bubble;
+}
+
+function isTranscriptNearBottom(threshold = 40) {
+  return transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < threshold;
+}
+
+// Auto-follows new content only while already near the bottom — someone
+// scrolled up to reread an earlier reply doesn't get yanked back down.
+function scrollTranscript(force = false) {
+  if (force || isTranscriptNearBottom(120)) {
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  }
+  scrollLatest.classList.toggle('show', !isTranscriptNearBottom());
+}
+
+transcriptEl.addEventListener('scroll', () => scrollLatest.classList.toggle('show', !isTranscriptNearBottom()));
+scrollLatest.onclick = () => scrollTranscript(true);
+
 function startUserTurn(text) {
-  clearTranscript();
   addBubble('user', text);
-  coderBubbleEl = addBubble('coder', '');
+  coderBubbleEl = addTypingBubble();
   coderText = '';
   turnActive = true;
+  scrollTranscript(true);
 }
 
 function appendTranscript(chunk) {
   if (!turnActive || !coderBubbleEl) {
-    clearTranscript();
-    coderBubbleEl = addBubble('coder', '');
+    coderBubbleEl = addTypingBubble();
     turnActive = true;
   }
+  if (coderBubbleEl.classList.contains('msg-typing')) {
+    coderBubbleEl.classList.remove('msg-typing');
+    coderBubbleEl.innerHTML = '';
+  }
   coderText += chunk;
-  coderBubbleEl.textContent = coderText.slice(-400);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  coderBubbleEl.textContent = coderText;
+  scrollTranscript();
 }
 
 function clearTranscript() {
   transcriptEl.innerHTML = '';
   coderBubbleEl = null;
   coderText = '';
+  scrollLatest.classList.remove('show');
 }
 
 function setTextDisabled(disabled) {
@@ -194,6 +232,46 @@ function hideContent() {
 }
 
 contentClose.onclick = hideContent;
+
+// ── Image results panel (buscar_imagen_stock tool) ────────────────────────────
+
+function showImageResults({ query, resultados }) {
+  if (!resultados || !resultados.length) return;
+
+  imageTitle.textContent = query ? `imágenes · ${query}` : 'imágenes';
+  imageGrid.innerHTML = '';
+
+  for (const r of resultados) {
+    const card = document.createElement('a');
+    card.className = 'image-card';
+    card.href = r.url;
+    card.target = '_blank';
+    card.rel = 'noopener noreferrer';
+
+    const img = document.createElement('img');
+    img.src = r.url;
+    img.alt = r.descripcion || '';
+    img.loading = 'lazy';
+    card.appendChild(img);
+
+    if (r.autor) {
+      const credit = document.createElement('span');
+      credit.className = 'image-credit';
+      credit.textContent = `foto: ${r.autor}`;
+      card.appendChild(credit);
+    }
+
+    imageGrid.appendChild(card);
+  }
+
+  imagePanel.classList.add('show');
+}
+
+function hideImageResults() {
+  imagePanel.classList.remove('show');
+}
+
+imageClose.onclick = hideImageResults;
 
 // ── File download (generar_archivo tool) ──────────────────────────────────────
 
@@ -336,6 +414,9 @@ async function connectSession() {
       case 'content':
         showContent(msg);
         break;
+      case 'images':
+        showImageResults(msg);
+        break;
       case 'download':
         triggerDownload(msg);
         break;
@@ -416,6 +497,8 @@ function disconnectSession() {
 
   if (cameraActive) stopCamera();
   hideEmailDraft();
+  hideImageResults();
+  clearTranscript();
 
   talkArea.hidden = true;
   btnSession.textContent = 'Conectar con Coder';

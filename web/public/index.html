@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -77,12 +77,34 @@
         radial-gradient(circle at 80% 75%, rgba(99, 102, 241, 0.05), transparent 50%);
       animation: bg-breathe 14s var(--ease-out) infinite alternate;
       pointer-events: none;
-      z-index: -2;
+      z-index: -3;
     }
 
     @keyframes bg-breathe {
       0%   { transform: scale(1) translateY(0); opacity: 0.75; }
       100% { transform: scale(1.18) translateY(-2%); opacity: 1; }
+    }
+
+    /* Second, slower-drifting gradient mesh — pure CSS (GPU compositing),
+       zero canvas/JS cost, layered under the particle field to add depth
+       without adding render work. Cheap enough to run at full strength on
+       every device, unlike the canvas layers which scale down on mobile. */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: -30%;
+      background:
+        radial-gradient(circle at 15% 15%, rgba(129, 140, 248, 0.08), transparent 42%),
+        radial-gradient(circle at 85% 20%, rgba(245, 158, 11, 0.05), transparent 38%),
+        radial-gradient(circle at 30% 85%, rgba(99, 102, 241, 0.07), transparent 45%);
+      animation: bg-drift 22s ease-in-out infinite alternate;
+      pointer-events: none;
+      z-index: -3;
+    }
+
+    @keyframes bg-drift {
+      0%   { transform: translate(0, 0) rotate(0deg); }
+      100% { transform: translate(-3%, 2%) rotate(6deg); }
     }
 
     /* Depth-of-field particle field — canvas injected by particles.js */
@@ -222,6 +244,62 @@
 
     .msg-coder::before { color: var(--text-dim); }
 
+    /* "Coder está escribiendo…" — three bouncing dots, shown while a reply
+       is pending, swapped for the real bubble as soon as text arrives. */
+    .typing-dots {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      height: 14px;
+      padding: 2px 0;
+    }
+
+    .typing-dots span {
+      display: block;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      animation: dot-bounce 1.1s ease-in-out infinite;
+    }
+    .typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+    @keyframes dot-bounce {
+      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+      30%           { transform: translateY(-3px); opacity: 1; }
+    }
+
+    /* Floating "jump to latest" button — appears once the user has
+       scrolled the transcript up away from the bottom. */
+    #scroll-latest {
+      position: absolute;
+      right: 14px;
+      bottom: -14px;
+      transform: translateY(50%) scale(0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--glass-bg-raised);
+      backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+      border: 1px solid var(--glass-border);
+      color: var(--accent-bright);
+      cursor: pointer;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s var(--ease-out), transform 0.2s var(--ease-out);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    }
+
+    #scroll-latest.show { opacity: 1; pointer-events: auto; transform: translateY(50%) scale(1); }
+    #scroll-latest .svg-icon { width: 16px; height: 16px; }
+
+    .panel { position: relative; }
+
     /* ── CONTENT PANEL (mostrar_contenido) ───────────────────── */
 
     #content-panel {
@@ -302,6 +380,66 @@
     }
 
     #content-body.nowrap { white-space: pre; word-break: normal; }
+
+    /* ── IMAGE RESULTS PANEL (buscar_imagen_stock) ───────────────────── */
+
+    #image-panel {
+      display: none;
+      width: 100%;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #image-panel.show {
+      display: flex;
+      animation: panel-in 0.32s var(--ease-out) both;
+    }
+
+    #image-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--text-bright); }
+
+    #image-close { display: flex; align-items: center; justify-content: center; background: transparent; border: none; color: var(--text-dim); cursor: pointer; padding: 5px; border-radius: 4px; transition: color 0.15s, background 0.15s; }
+    #image-close:hover { color: var(--text-bright); background: rgba(255,255,255,0.06); }
+
+    #image-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      padding: 14px;
+      max-height: 420px;
+      overflow-y: auto;
+    }
+
+    .image-card {
+      display: block;
+      position: relative;
+      border-radius: 12px;
+      overflow: hidden;
+      aspect-ratio: 4 / 3;
+      background: var(--code-bg);
+      border: 1px solid var(--glass-border);
+    }
+
+    .image-card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: transform 0.25s var(--ease-out);
+    }
+
+    .image-card:hover img { transform: scale(1.05); }
+
+    .image-card .image-credit {
+      position: absolute;
+      inset: auto 0 0 0;
+      padding: 5px 8px;
+      font-size: 9.5px;
+      color: rgba(255, 255, 255, 0.9);
+      background: linear-gradient(to top, rgba(0, 0, 0, 0.65), transparent);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
     /* ── EMAIL DRAFT PANEL (enviar_email) ────────────────────── */
 
@@ -423,14 +561,38 @@
 
     .email-btn-approve:hover { filter: brightness(1.15); }
 
-    /* ── CONTROLS ────────────────────────────────────────────── */
+    /* ── FLOATING DOCK ───────────────────────────────────────────────────
+       Single glass shell for session/talk/tools — previously three separate
+       backdrop-filter surfaces (.input-dock, .toolbar, plus the bare session
+       button). One shared blur surface instead of three both reads cleaner
+       and costs less to composite on mobile. Fixed to the bottom of the
+       viewport like a standard chat composer dock. */
 
-    .controls {
+    .dock {
+      /* Sticky, not fixed: it occupies its normal spot in the document flow
+         until scrolling would carry it past the bottom of the viewport, at
+         which point it pins there — the same "floating dock" feel as fixed
+         positioning, but it can never overlap content above it on first
+         paint (fixed's fixed screen-relative box can, on short viewports,
+         independent of scroll position; sticky's can't). */
+      position: sticky;
+      bottom: max(14px, env(safe-area-inset-bottom, 0px));
+      z-index: 50;
+      width: min(560px, calc(100vw - 24px));
       display: flex;
       flex-direction: column;
-      align-items: center;
-      gap: 14px;
+      align-items: stretch;
+      gap: 2px;
+      padding: 8px;
+      background: var(--glass-bg);
+      backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+      border: 1px solid var(--glass-border);
+      border-radius: 28px;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.07) inset, 0 14px 38px rgba(0, 0, 0, 0.4);
     }
+
+    .dock-session-row { display: flex; justify-content: center; padding: 4px; }
 
     /* ── SESSION BUTTON (connect/disconnect) ─────────────────── */
 
@@ -478,26 +640,19 @@
     .talk-area[hidden] { display: none; }
     .talk-area.enter { animation: panel-in 0.4s var(--ease-out) both; }
 
-    /* Floating glass pill dock — mic, text input and send all in one shell */
+    /* Mic, text input and send — now an internal row of .dock, no longer
+       its own glass surface (see .dock above). */
     .input-dock {
       display: flex;
       align-items: flex-end;
       gap: 6px;
       width: 100%;
-      padding: 5px;
-      background: var(--glass-bg);
-      backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
-      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
-      border: 1px solid var(--glass-border);
-      border-radius: 30px;
-      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.07) inset, 0 10px 30px rgba(0, 0, 0, 0.3);
-      transition: border-color 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out);
+      padding: 3px;
+      border-radius: 22px;
+      transition: background 0.2s var(--ease-out);
     }
 
-    .input-dock:focus-within {
-      border-color: rgba(99, 102, 241, 0.38);
-      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset, 0 10px 30px rgba(0, 0, 0, 0.3), 0 0 0 3px rgba(99, 102, 241, 0.1);
-    }
+    .input-dock:focus-within { background: rgba(99, 102, 241, 0.08); }
 
     #btn-talk {
       display: flex;
@@ -576,13 +731,14 @@
     #btn-send:hover:not(:disabled) { background: var(--accent); color: #fff; transform: scale(1.06); }
     #btn-send:disabled { opacity: 0.4; cursor: default; }
 
+    /* Camera/file — internal row of .dock; border-top separates it from
+       whichever row sits above (session button or talk-area). */
     .toolbar {
       display: flex;
+      justify-content: center;
       gap: 6px;
-      padding: 6px;
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      border-radius: 16px;
+      padding: 4px 6px 2px;
+      border-top: 1px solid var(--glass-border);
     }
 
     .icon-btn {
@@ -696,10 +852,12 @@
     #camera-preview {
       display: none;
       position: fixed;
-      bottom: 24px;
-      right: 24px;
-      width: 160px;
-      height: 120px;
+      /* Top-right, clear of the fixed .dock at the bottom regardless of
+         its current height (collapsed vs. expanded with talk-area). */
+      top: 16px;
+      right: 16px;
+      width: 140px;
+      height: 105px;
       border-radius: 22px;
       border: 1.5px solid rgba(255, 255, 255, 0.16);
       object-fit: cover;
@@ -764,6 +922,35 @@
     }
 
     #toast.show { opacity: 1; transform: translate(0, 0) scale(1); }
+
+    /* ── MOBILE PERF: lighter glass ──────────────────────────────────────
+       backdrop-filter re-blurs its backdrop every frame something behind it
+       changes (the particle canvas), which is expensive — worse the bigger
+       the blur radius and the weaker the GPU. Phones get a much smaller
+       radius, and the toast (small, transient) drops backdrop-filter
+       entirely in favor of a plain translucent fill. */
+    @media (max-width: 640px) {
+      :root { --glass-blur: 10px; }
+
+      #toast {
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        background: var(--glass-bg-raised);
+      }
+    }
+
+    /* ── SHORT VIEWPORTS ─────────────────────────────────────────────────
+       .dock is sticky, which reserves its own space in flow so it can't
+       overlap what comes after it — but on a short window (small laptop,
+       split-screen browser) the header + orb + transcript can add up to
+       more than the viewport height, forcing the dock to "stick" earlier
+       than its natural position and overlap the transcript above it.
+       Shrinking the header on short viewports keeps everything clear. */
+    @media (max-height: 720px) {
+      #robot-container { width: min(220px, 60vw); height: min(220px, 60vw); }
+      .app-shell { gap: 14px; }
+      #transcript { min-height: 90px; }
+    }
   </style>
 </head>
 <body>
@@ -780,6 +967,19 @@
 
     <div class="panel">
       <div id="transcript"></div>
+      <button id="scroll-latest" title="Ir al final">
+        <svg class="svg-icon" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+    </div>
+
+    <div id="image-panel" class="panel">
+      <div id="content-header">
+        <span id="image-title"></span>
+        <button id="image-close" title="Cerrar">
+          <svg class="svg-icon icon-close" viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+        </button>
+      </div>
+      <div id="image-grid"></div>
     </div>
 
     <div id="content-panel" class="panel">
@@ -814,8 +1014,10 @@
       </div>
     </div>
 
-    <div class="controls">
-      <button id="btn-session">Conectar con Coder</button>
+    <div class="dock">
+      <div class="dock-session-row">
+        <button id="btn-session">Conectar con Coder</button>
+      </div>
 
       <div id="talk-area" class="talk-area" hidden>
         <form id="text-form" class="input-dock">

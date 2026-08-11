@@ -8,6 +8,13 @@ const SIZE   = 340; // logical (CSS) px — canvas backing store scales by DPR
 const CORE_R = 46;
 const N_PTS  = 10;  // points around the blob boundary
 
+// Same low-power detection as particles.js — shadowBlur is the single
+// costliest Canvas2D op and this canvas re-runs it every frame, forever.
+const LIGHT = window.matchMedia('(max-width: 768px)').matches
+  || (navigator.hardwareConcurrency || 8) <= 4
+  || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const MAX_DPR = LIGHT ? 1.5 : 2;
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 let _state     = 'idle';
@@ -15,6 +22,8 @@ let _micNode   = null;
 let _outNode   = null;
 let _container = null;
 let canvas, ctx;
+let _visible   = true;
+let _loopQueued = false;
 
 let micLvl = 0;
 let outLvl = 0;
@@ -49,7 +58,7 @@ export function initRobot(container) {
   canvas.style.width  = '100%';
   canvas.style.height = '100%';
   canvas.style.display = 'block';
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
   canvas.width  = SIZE * dpr;
   canvas.height = SIZE * dpr;
   ctx = canvas.getContext('2d');
@@ -57,6 +66,12 @@ export function initRobot(container) {
   container.appendChild(canvas);
 
   readColors();
+
+  document.addEventListener('visibilitychange', () => {
+    _visible = !document.hidden;
+    if (_visible) _startLoop();
+  });
+
   _startLoop();
 }
 
@@ -232,7 +247,9 @@ function render(t) {
 
   ctx.save();
   ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.55)`;
-  ctx.shadowBlur = 22 + energy * 30;
+  // shadowBlur is the priciest Canvas2D op there is — LIGHT profile keeps a
+  // soft glow but caps it well below desktop's so it doesn't dominate frame time.
+  ctx.shadowBlur = LIGHT ? Math.min(14, 10 + energy * 12) : 22 + energy * 30;
   smoothBlobPath(ctx, points);
   ctx.fillStyle = coreGrad;
   ctx.fill();
@@ -249,8 +266,12 @@ function render(t) {
       const ringR = CORE_R * 0.9 + progress * CORE_R * 3.4;
       const ringOpacity = (1 - progress) * 0.85;
       ctx.save();
-      ctx.shadowColor = `rgba(${sr}, ${sg}, ${sb}, ${ringOpacity})`;
-      ctx.shadowBlur = 18;
+      // LIGHT profile skips the shadow entirely — the ring is brief (750ms,
+      // triggered rarely) and reads fine as a plain stroke without it.
+      if (!LIGHT) {
+        ctx.shadowColor = `rgba(${sr}, ${sg}, ${sb}, ${ringOpacity})`;
+        ctx.shadowBlur = 18;
+      }
       ctx.strokeStyle = `rgba(${sr}, ${sg}, ${sb}, ${ringOpacity})`;
       ctx.lineWidth = 2.5;
       ctx.beginPath();
@@ -262,7 +283,10 @@ function render(t) {
 }
 
 function _startLoop() {
+  if (_loopQueued) return;
+  _loopQueued = true;
   const loop = (now) => {
+    if (!_visible) { _loopQueued = false; return; }
     requestAnimationFrame(loop);
     render(now / 1000);
   };

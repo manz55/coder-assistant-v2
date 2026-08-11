@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import compression from 'compression';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.WEB_PORT || 3000;
 
 const app = express();
+app.use(compression());
 app.use(express.static(join(__dirname, 'public')));
 
 const server = createServer(app);
@@ -375,6 +377,9 @@ wss.on('connection', async (ws) => {
           try {
             const resultados = await searchUnsplashImages(args.busqueda);
             console.log(`[Tool] Unsplash "${args.busqueda}": ${resultados.length} resultados`);
+            // The model only gets text back from tool results — send the
+            // actual images to the client separately so Joshua sees them.
+            safeSend(ws, { type: 'images', query: args.busqueda, resultados });
             result = { success: true, resultados };
           } catch (err) {
             console.error('[Tool] Error buscando en Unsplash:', err.message);

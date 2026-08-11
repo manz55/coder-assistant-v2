@@ -7,13 +7,24 @@ import { getRMSLevel } from './audio-analyser.js';
 // motion is always smooth and never snaps or clumps). State only biases
 // how far/fast a particle strays from its home, blended in with easing.
 
-const N = 52;
+// Phones/low-core devices get a cheaper profile: fewer particles, no
+// per-particle canvas `filter` (a blur-filter context switch per draw call
+// is one of the priciest Canvas2D ops and tanks frame time on mid/low-end
+// mobile GPUs), and a capped backing-store resolution.
+const LIGHT = window.matchMedia('(max-width: 768px)').matches
+  || (navigator.hardwareConcurrency || 8) <= 4
+  || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const N = LIGHT ? 16 : 52;
+const MAX_DPR = LIGHT ? 1.5 : 2;
 
 let canvas, ctx, W, H, dpr;
 let particles = [];
 let _state    = 'idle';
 let _micNode  = null;
 let _outNode  = null;
+let _visible  = true;
+let _loopQueued = false;
 
 let sparkActive = false;
 let sparkStart  = 0;
@@ -37,6 +48,14 @@ export function initParticles(container) {
   window.addEventListener('resize', resize);
 
   particles = Array.from({ length: N }, makeParticle);
+
+  // Don't burn CPU/GPU animating a canvas nobody can see — pause the whole
+  // loop while the tab is backgrounded and pick it back up on return.
+  document.addEventListener('visibilitychange', () => {
+    _visible = !document.hidden;
+    if (_visible) _startLoop();
+  });
+
   _startLoop();
 }
 
@@ -69,7 +88,7 @@ function hexToRgb(hex) {
 function resize() {
   W = window.innerWidth;
   H = window.innerHeight;
-  dpr = window.devicePixelRatio || 1;
+  dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
   canvas.width  = W * dpr;
   canvas.height = H * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -167,15 +186,21 @@ function render(t) {
 
     ctx.beginPath();
     ctx.fillStyle = `rgba(${r | 0}, ${g | 0}, ${b | 0}, ${alpha})`;
-    ctx.filter = p.depth < 0.4 ? `blur(${(0.4 - p.depth) * 2.5}px)` : 'none';
+    // `filter: blur()` is a per-draw-call context switch — one of the most
+    // expensive Canvas2D ops on mobile GPUs. LIGHT profile skips it and
+    // leans on alpha alone for the depth-of-field feel instead.
+    if (!LIGHT) ctx.filter = p.depth < 0.4 ? `blur(${(0.4 - p.depth) * 2.5}px)` : 'none';
     ctx.arc(x, y, p.size * (1 + sparkEnvelope * 0.5), 0, Math.PI * 2);
     ctx.fill();
   }
-  ctx.filter = 'none';
+  if (!LIGHT) ctx.filter = 'none';
 }
 
 function _startLoop() {
+  if (_loopQueued) return; // already running, don't stack multiple loops
+  _loopQueued = true;
   const loop = (now) => {
+    if (!_visible) { _loopQueued = false; return; } // resumed by visibilitychange
     requestAnimationFrame(loop);
     render(now / 1000);
   };
