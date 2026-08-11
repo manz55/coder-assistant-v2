@@ -184,17 +184,29 @@ export const ALL_TOOLS = [
     function: {
       name: 'crear_recordatorio',
       description:
-        'Crea un recordatorio para una fecha y hora futura — Coder le manda una notificación push al celular de Joshua ' +
-        'cuando llega el momento. Usala cuando Joshua pida que le recuerdes algo en un momento específico. Resolvé fechas ' +
-        'relativas ("mañana", "en 2 horas", "el viernes") usando la fecha y hora actual que tenés en el system prompt. ' +
+        'Crea un recordatorio — Coder le manda una notificación push al celular de Joshua cuando llega el momento. ' +
+        'Usala cuando Joshua pida que le recuerdes algo en un momento específico.\n\n' +
+        'IMPORTANTE — cómo elegir el momento: NUNCA calcules vos una fecha/hora absoluta para pedidos relativos ' +
+        '("en 5 minutos", "en 2 horas", "en una hora") — los LLMs son malos haciendo esa aritmética. Para esos casos ' +
+        'usá minutos_desde_ahora con el número de minutos, y dejá que el servidor haga la cuenta. ' +
+        'Usá fecha_hora SOLO para una fecha/hora absoluta y explícita ("el 20 de agosto a las 10", "mañana a las 3pm") — ' +
+        'en ese caso tiene que ser ISO 8601 CON offset explícito (ej. "2026-08-20T10:00:00-06:00", nunca sin el "-06:00" al final), ' +
+        'basándote en el ISO de "ahora" que tenés en el system prompt. Mandá uno de los dos parámetros, nunca ninguno.\n\n' +
         'Después de invocarla, confirmá con Joshua qué guardaste y para cuándo usando fecha_hora_legible que te devuelve — nunca le muestres el ISO crudo.',
       parameters: {
         type: 'object',
         properties: {
           mensaje: { type: 'string', description: 'Qué hay que recordarle a Joshua' },
-          fecha_hora: { type: 'string', description: 'Fecha y hora en formato ISO 8601, ej. "2026-08-15T14:30:00"' },
+          minutos_desde_ahora: {
+            type: 'integer',
+            description: 'Preferido para pedidos relativos ("en N minutos/horas") — cantidad de minutos desde ahora. El servidor calcula la fecha exacta.',
+          },
+          fecha_hora: {
+            type: 'string',
+            description: 'Solo para fechas/horas absolutas. ISO 8601 CON offset explícito, ej. "2026-08-20T10:00:00-06:00".',
+          },
         },
-        required: ['mensaje', 'fecha_hora'],
+        required: ['mensaje'],
       },
     },
   },
@@ -202,26 +214,51 @@ export const ALL_TOOLS = [
 
 export const TERMINAL_TOOLS = ALL_TOOLS.filter(t => t.function.name === 'guardar_hecho');
 
-export function buildSystemContent(systemPrompt, facts) {
-  // Needed so crear_recordatorio can resolve relative dates ("mañana",
-  // "en 2 horas") into a real ISO timestamp — nothing else in the prompt
-  // ever tells the model what "now" is.
-  const now = new Date().toLocaleString('es-AR', {
+const REMINDER_TIMEZONE = 'America/Guatemala'; // UTC-6, no DST
+
+// ISO 8601 string with an explicit numeric offset, e.g. "2026-08-11T00:41:00-06:00".
+// Built from Intl parts rather than toISOString() so the offset reflects
+// REMINDER_TIMEZONE instead of always being "Z" (UTC).
+function isoNowInTimezone(timeZone) {
+  const fields = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+  const p = Object.fromEntries(fields.map(f => [f.type, f.value]));
+
+  const offsetName = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
+    .formatToParts(new Date())
+    .find(f => f.type === 'timeZoneName').value; // "GMT-06:00"
+  const offset = offsetName.replace('GMT', '') || '+00:00';
+
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}${offset}`;
+}
+
+// Called fresh on every chat.completions.create — NOT baked into the static
+// system content once per connection, which would go stale on long-running
+// sessions (a request for "en 5 minutos" late in a multi-hour session would
+// otherwise still be anchored to whatever "now" was at connect time).
+export function currentDateTimeBlock() {
+  const legible = new Date().toLocaleString('es-GT', {
     dateStyle: 'full',
     timeStyle: 'short',
-    timeZone: 'America/Argentina/Buenos_Aires',
+    timeZone: REMINDER_TIMEZONE,
   });
+  const iso = isoNowInTimezone(REMINDER_TIMEZONE);
 
-  let content = `${systemPrompt}\n\n--- FECHA Y HORA ACTUAL ---\n${now} (America/Argentina/Buenos_Aires)\n--- FIN FECHA Y HORA ---`;
+  return `--- FECHA Y HORA ACTUAL ---\n${legible} (${REMINDER_TIMEZONE}, UTC-6)\nISO: ${iso}\n--- FIN FECHA Y HORA ---`;
+}
 
-  if (facts.length) {
-    content +=
-      '\n\n--- HECHOS QUE SABÉS SOBRE JOSHUA ---\n' +
-      facts.map(f => `[${f.category}] ${f.content}`).join('\n') +
-      '\n--- FIN DE HECHOS ---';
-  }
-
-  return content;
+export function buildSystemContent(systemPrompt, facts) {
+  if (!facts.length) return systemPrompt;
+  return (
+    systemPrompt +
+    '\n\n--- HECHOS QUE SABÉS SOBRE JOSHUA ---\n' +
+    facts.map(f => `[${f.category}] ${f.content}`).join('\n') +
+    '\n--- FIN DE HECHOS ---'
+  );
 }
 
 export async function summarizeConversation(transcript) {

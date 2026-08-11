@@ -9,7 +9,7 @@ import Groq, { toFile } from 'groq-sdk';
 import { PDFParse } from 'pdf-parse';
 import nodemailer from 'nodemailer';
 import { getSystemPrompt, getRelevantFacts, saveFact, createReminder, getDueReminders, markReminderNotified } from '../src/memory.js';
-import { MODEL, ALL_TOOLS, buildSystemContent } from '../src/groq-brain.js';
+import { MODEL, ALL_TOOLS, buildSystemContent, currentDateTimeBlock } from '../src/groq-brain.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.WEB_PORT || 3000;
@@ -311,9 +311,12 @@ wss.on('connection', async (ws) => {
   async function runGroq(userContent) {
     chatHistory.push({ role: 'user', content: userContent });
 
+    // Computed fresh per call, not baked into systemContent once at connect
+    // time — a long-running session would otherwise anchor "now" to whenever
+    // the WS connected, hours stale by the time crear_recordatorio needs it.
     let response = await groq.chat.completions.create({
       model: MODEL,
-      messages: [{ role: 'system', content: systemContent }, ...chatHistory],
+      messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
       tools: ALL_TOOLS,
       tool_choice: 'auto',
     });
@@ -415,13 +418,34 @@ wss.on('connection', async (ws) => {
         }
 
         if (tc.function.name === 'crear_recordatorio') {
-          const { mensaje, fecha_hora } = args;
+          const { mensaje, minutos_desde_ahora, fecha_hora } = args;
+          // Log the model's raw args before any processing — if the date
+          // ever comes out wrong again, this says immediately whether the
+          // model ignored minutos_desde_ahora, sent a bad fecha_hora, or both.
+          console.log(`[Recordatorio] Args del modelo — minutos_desde_ahora=${minutos_desde_ahora ?? 'n/a'} fecha_hora=${fecha_hora ?? 'n/a'}`);
+
           try {
-            const reminder = await createReminder(mensaje, fecha_hora);
-            const legible = new Date(reminder.fecha_hora).toLocaleString('es-AR', {
+            let resolvedFechaHora;
+
+            if (typeof minutos_desde_ahora === 'number' && Number.isFinite(minutos_desde_ahora)) {
+              // Relative time is computed here, deterministically — never by the model.
+              resolvedFechaHora = new Date(Date.now() + minutos_desde_ahora * 60000).toISOString();
+            } else if (typeof fecha_hora === 'string' && fecha_hora) {
+              if (!/(Z|[+-]\d{2}:\d{2})$/.test(fecha_hora)) {
+                throw new Error(`fecha_hora sin offset de zona horaria explícito: "${fecha_hora}" — no se puede guardar de forma confiable`);
+              }
+              resolvedFechaHora = fecha_hora;
+            } else {
+              throw new Error('falta minutos_desde_ahora o fecha_hora');
+            }
+
+            console.log(`[Recordatorio] fecha_hora resuelta antes de guardar: ${resolvedFechaHora}`);
+
+            const reminder = await createReminder(mensaje, resolvedFechaHora);
+            const legible = new Date(reminder.fecha_hora).toLocaleString('es-GT', {
               dateStyle: 'full',
               timeStyle: 'short',
-              timeZone: 'America/Argentina/Buenos_Aires',
+              timeZone: 'America/Guatemala',
             });
             console.log(`[Tool] Recordatorio creado: "${mensaje}" para ${legible}`);
             result = { success: true, mensaje, fecha_hora_legible: legible };
@@ -440,7 +464,7 @@ wss.on('connection', async (ws) => {
 
       response = await groq.chat.completions.create({
         model: MODEL,
-        messages: [{ role: 'system', content: systemContent }, ...chatHistory],
+        messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
         tools: ALL_TOOLS,
         tool_choice: 'auto',
       });
