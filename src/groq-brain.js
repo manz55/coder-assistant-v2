@@ -315,6 +315,38 @@ export const ALL_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'entregar_respuesta',
+      description:
+        'SIEMPRE terminá tu turno invocando esta tool — nunca respondas con texto plano suelto, ' +
+        'incluso para un saludo simple. Te obliga a separar tu respuesta en dos versiones, porque el ' +
+        'frontend lee una en voz alta y muestra la otra en pantalla, y no puede adivinar cuál es cuál.',
+      parameters: {
+        type: 'object',
+        properties: {
+          respuesta_corta: {
+            type: 'string',
+            description:
+              'Lo que se lee en voz alta con text-to-speech. 1-4 oraciones, lenguaje 100% hablado — ' +
+              'CERO LaTeX, código, markdown, tablas o cualquier símbolo crudo (nada de "$", "**", "\\frac", ' +
+              '"```", etc.). Si la respuesta involucra algo técnico, describilo en palabras acá ' +
+              '("te dejé la fórmula en pantalla") y el detalle real va en desarrollo_completo.',
+          },
+          desarrollo_completo: {
+            type: 'string',
+            description:
+              'Opcional — solo cuando hay contenido largo o técnico que vale la pena mostrar en pantalla ' +
+              '(código, LaTeX, tablas, un desarrollo paso a paso). Puede tener markdown/LaTeX crudo, formato ' +
+              'técnico, lo que haga falta. Si la respuesta ya es corta y no hay nada más que mostrar, omití ' +
+              'esta clave por completo — nunca mandes null ni "" ni la repitas idéntica a respuesta_corta.',
+          },
+        },
+        required: ['respuesta_corta'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'resumir_texto',
       description:
         'Resume un texto largo que Joshua pegó o que salió de otra tool (un archivo, una búsqueda, etc.), ajustando ' +
@@ -340,7 +372,7 @@ export const TERMINAL_TOOLS = ALL_TOOLS.filter(t => t.function.name === 'guardar
 // out of what's offered to the model entirely rather than being proposed
 // and then failing. process.platform doesn't change at runtime, so this is
 // computed once here instead of per-request.
-const DARWIN_ONLY_TOOLS = new Set(['controlar_volumen', 'controlar_brillo', 'abrir_app']);
+export const DARWIN_ONLY_TOOLS = new Set(['controlar_volumen', 'controlar_brillo', 'abrir_app']);
 
 export const AVAILABLE_TOOLS = process.platform === 'darwin'
   ? ALL_TOOLS

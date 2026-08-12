@@ -249,7 +249,6 @@ contentClose.onclick = hideContent;
 // requested 45-60s range) or until the next turn starts, then it fades away
 // on its own instead of sitting there forever.
 
-const LONG_RESPONSE_THRESHOLD_CHARS = 300;
 const RESPONSE_PANEL_VISIBLE_MS = 50000;
 let responseHideTimer = null;
 
@@ -468,10 +467,15 @@ async function connectSession() {
         scheduleAudio(msg.data);
         break;
       case 'text':
+        // The server now always sends a short, speakable version (content)
+        // plus an optional long/technical version (desarrollo) via the
+        // entregar_respuesta tool — the model decides the split, so the
+        // frontend no longer has to guess from character count which
+        // version goes where.
         appendTranscript(msg.content);
         speakText(msg.content);
-        if (msg.content.length > LONG_RESPONSE_THRESHOLD_CHARS) {
-          showResponsePanel(msg.content);
+        if (msg.desarrollo) {
+          showResponsePanel(msg.desarrollo);
         } else if (responsePanel.classList.contains('show')) {
           hideResponsePanel(); // a short reply shouldn't leave a stale long one lingering
         }

@@ -12,7 +12,7 @@ import Groq, { toFile } from 'groq-sdk';
 import { PDFParse } from 'pdf-parse';
 import nodemailer from 'nodemailer';
 import { getSystemPrompt, getRelevantFacts, saveFact, createReminder, getDueReminders, markReminderNotified } from '../src/memory.js';
-import { MODEL, VISION_MODEL, AVAILABLE_TOOLS, buildSystemContent, currentDateTimeBlock } from '../src/groq-brain.js';
+import { MODEL, VISION_MODEL, AVAILABLE_TOOLS, DARWIN_ONLY_TOOLS, buildSystemContent, currentDateTimeBlock } from '../src/groq-brain.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.WEB_PORT || 3000;
@@ -554,7 +554,24 @@ function escapeAppleScriptString(str) {
 // than chase a specific malformed-argument shape that may not repeat.
 function isToolCallValidationError(err) {
   const msg = String(err?.error?.error?.message ?? err?.error?.message ?? err?.message ?? '');
-  return /tool call validation failed/i.test(msg) || /parameters for tool/i.test(msg);
+  return /tool call validation failed/i.test(msg) || /parameters for tool/i.test(msg) || /was not defined in the request/i.test(msg);
+}
+
+// The system prompt has a hard rule telling the model to always call
+// controlar_volumen/controlar_brillo/abrir_app when asked — it has no
+// platform awareness, so on Render (non-darwin, where DARWIN_ONLY_TOOLS are
+// filtered out of AVAILABLE_TOOLS) the model can still try to call one of
+// them from memory of the rule, and Groq rejects it server-side with a
+// "tool call validation failed"/"was not defined in the request" error that
+// names the tool. Confirmed against the real model + real system prompt
+// with AVAILABLE_TOOLS filtered to non-darwin: the model doesn't always
+// hallucinate the call (sometimes it falls back to manual instructions or a
+// clarifying question instead), but when it does, this is what's needed to
+// turn it into the same friendly message brillo already got by chance
+// instead of leaking Groq's raw error text.
+function missingDarwinTool(err) {
+  const msg = String(err?.error?.error?.message ?? err?.error?.message ?? err?.message ?? '');
+  return [...DARWIN_ONLY_TOOLS].find((name) => msg.includes(name)) ?? null;
 }
 
 async function createChatCompletionWithRetry(groq, params) {
@@ -584,6 +601,8 @@ function describeGroqError(err) {
     `[Groq] status=${status ?? 'n/a'} code=${code ?? 'n/a'} type=${type ?? 'n/a'} model=${MODEL} — ${apiMessage}`
   );
 
+  const darwinTool = missingDarwinTool(err);
+  if (darwinTool) return '(esa acción es de control de la Mac de Joshua y este server no corre en una Mac — no la tengo disponible acá)';
   if (status === 401) return '(Groq rechazó la API key — revisá GROQ_API_KEY en las variables de entorno del servidor)';
   // Groq returns 413 (sometimes bundled under a generic rate_limit_exceeded
   // code) when a single request's tokens blow past the free-tier TPM limit
@@ -649,22 +668,35 @@ wss.on('connection', async (ws) => {
     // Computed fresh per call, not baked into systemContent once at connect
     // time — a long-running session would otherwise anchor "now" to whenever
     // the WS connected, hours stale by the time crear_recordatorio needs it.
+    // 'required' (not 'auto') so the model can never end a turn with a plain
+    // text message — it always has to go through entregar_respuesta, which
+    // is what forces the respuesta_corta/desarrollo_completo split instead
+    // of relying on the model remembering a text-formatting rule.
     let response = await createChatCompletionWithRetry(groq, {
       model: MODEL,
       messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
       tools: AVAILABLE_TOOLS,
-      tool_choice: 'auto',
+      tool_choice: 'required',
     });
 
     let choice = response.choices[0];
+    let respuestaFinal = null;
 
-    while (choice.finish_reason === 'tool_calls') {
+    while (choice.finish_reason === 'tool_calls' && !respuestaFinal) {
       const toolCalls = choice.message.tool_calls ?? [];
       chatHistory.push(choice.message);
 
       for (const tc of toolCalls) {
         const args = JSON.parse(tc.function.arguments);
         let result = {};
+
+        if (tc.function.name === 'entregar_respuesta') {
+          respuestaFinal = {
+            respuestaCorta: args.respuesta_corta ?? '',
+            desarrolloCompleto: args.desarrollo_completo || null,
+          };
+          result = { success: true };
+        }
 
         if (tc.function.name === 'guardar_hecho') {
           try {
@@ -928,19 +960,29 @@ wss.on('connection', async (ws) => {
         });
       }
 
-      response = await createChatCompletionWithRetry(groq, {
-        model: MODEL,
-        messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
-        tools: AVAILABLE_TOOLS,
-        tool_choice: 'auto',
-      });
-      choice = response.choices[0];
+      if (!respuestaFinal) {
+        response = await createChatCompletionWithRetry(groq, {
+          model: MODEL,
+          messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
+          tools: AVAILABLE_TOOLS,
+          tool_choice: 'required',
+        });
+        choice = response.choices[0];
+      }
     }
 
-    const text = choice.message.content ?? '';
-    chatHistory.push({ role: 'assistant', content: text });
-
-    if (text) safeSend(ws, { type: 'text', content: text });
+    if (respuestaFinal) {
+      if (respuestaFinal.respuestaCorta) {
+        safeSend(ws, { type: 'text', content: respuestaFinal.respuestaCorta, desarrollo: respuestaFinal.desarrolloCompleto });
+      }
+    } else {
+      // Defensive fallback — tool_choice: 'required' should make this
+      // unreachable, but if the model ever ends a turn with finish_reason
+      // 'stop' and no entregar_respuesta call, don't silently say nothing.
+      const text = choice.message.content ?? '';
+      chatHistory.push({ role: 'assistant', content: text });
+      if (text) safeSend(ws, { type: 'text', content: text });
+    }
 
     safeSend(ws, { type: 'status', text: 'listening' });
   }

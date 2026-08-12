@@ -2,7 +2,7 @@
 // thing that forces browsers with an old SW already installed (Safari,
 // Android Chrome) to fetch the new files instead of serving stale ones
 // from cache forever.
-const CACHE_VERSION = 'v19';
+const CACHE_VERSION = 'v20';
 const CACHE = `coder-cache-${CACHE_VERSION}`;
 
 const STATIC = [
