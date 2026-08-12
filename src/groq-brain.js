@@ -4,6 +4,11 @@ import Groq from 'groq-sdk';
 // shutdown 2026-08-16 — requests started failing before the cutover date.
 // openai/gpt-oss-120b is Groq's recommended replacement with tool-use support.
 export const MODEL = 'openai/gpt-oss-120b';
+// MODEL has no vision support (confirmed against console.groq.com/docs/vision,
+// Aug 2026) — qwen/qwen3.6-27b is Groq's only current vision-capable model.
+// Used exclusively for image attachments (see analyzeImage in web/server.js);
+// the main conversation stays on MODEL.
+export const VISION_MODEL = 'qwen/qwen3.6-27b';
 export const CATEGORIAS_VALIDAS = ['perfil', 'proyectos', 'ventas_jzet_labs', 'dev_preferences', 'personal'];
 export const TIPOS_CONTENIDO_VALIDOS = ['codigo', 'sql', 'texto', 'lista'];
 
@@ -328,6 +333,18 @@ export const ALL_TOOLS = [
 ];
 
 export const TERMINAL_TOOLS = ALL_TOOLS.filter(t => t.function.name === 'guardar_hecho');
+
+// controlar_volumen / controlar_brillo / abrir_app shell out to osascript,
+// which only exists on macOS — on any other platform (e.g. Render, Linux)
+// they can never work no matter what Joshua confirms, so they're filtered
+// out of what's offered to the model entirely rather than being proposed
+// and then failing. process.platform doesn't change at runtime, so this is
+// computed once here instead of per-request.
+const DARWIN_ONLY_TOOLS = new Set(['controlar_volumen', 'controlar_brillo', 'abrir_app']);
+
+export const AVAILABLE_TOOLS = process.platform === 'darwin'
+  ? ALL_TOOLS
+  : ALL_TOOLS.filter(t => !DARWIN_ONLY_TOOLS.has(t.function.name));
 
 const REMINDER_TIMEZONE = 'America/Guatemala'; // UTC-6, no DST
 

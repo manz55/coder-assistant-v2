@@ -12,7 +12,7 @@ import Groq, { toFile } from 'groq-sdk';
 import { PDFParse } from 'pdf-parse';
 import nodemailer from 'nodemailer';
 import { getSystemPrompt, getRelevantFacts, saveFact, createReminder, getDueReminders, markReminderNotified } from '../src/memory.js';
-import { MODEL, ALL_TOOLS, buildSystemContent, currentDateTimeBlock } from '../src/groq-brain.js';
+import { MODEL, VISION_MODEL, AVAILABLE_TOOLS, buildSystemContent, currentDateTimeBlock } from '../src/groq-brain.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.WEB_PORT || 3000;
@@ -453,6 +453,35 @@ async function transcribeAudio(groq, pcmBuffer) {
   return transcription.text?.trim() ?? '';
 }
 
+// Image attachments — MODEL (openai/gpt-oss-120b) has no vision, so a
+// one-off call to VISION_MODEL "looks" at the image and reports back in
+// text; that description then goes into the main conversation as normal
+// user content, same shape as the PDF/text-file branches above. This keeps
+// vision isolated to the one call that actually needs it instead of
+// switching the whole session's model.
+async function analyzeImage(groq, base64Jpeg, filename) {
+  const response = await groq.chat.completions.create({
+    model: VISION_MODEL,
+    max_tokens: 800,
+    messages: [{
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text:
+            `Esta imagen se llama "${filename}". Describí en detalle qué hay en ella. ` +
+            'Si es un problema matemático, un ejercicio o texto con una pregunta, transcribilo completo y ' +
+            'resolvelo/respondelo paso a paso. Si es texto en general, transcribilo. Si es una foto de algo ' +
+            'sin texto, describila con precisión. Respondé en español.',
+        },
+        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Jpeg}` } },
+      ],
+    }],
+  });
+
+  return response.choices[0]?.message?.content?.trim() || null;
+}
+
 // TTS is handled entirely client-side via the browser's Web Speech API
 // (speechSynthesis) — see web/public/app.js. Self-hosting it server-side
 // (Piper) OOM-killed Render (status 137) even at the "medium" voice tier, so
@@ -557,6 +586,25 @@ wss.on('connection', async (ws) => {
   let pendingSystemCommand = null;
   let recordedChunks = [];
 
+  // The `ws` library starts parsing incoming frames the instant the
+  // connection opens, independent of whether the app has attached a
+  // 'message' listener yet — and a plain EventEmitter silently drops any
+  // event with zero listeners (no queueing, no error). The context load
+  // below awaits Supabase before this used to register, so anything a
+  // client sent right after connecting (e.g. tapping the camera/file button
+  // immediately, or typing before "ready") could vanish with no trace.
+  // Registering synchronously here and buffering until context load
+  // finishes closes that window completely — verified with a raw WS client
+  // that a message sent right on 'open' was silently lost before this fix,
+  // and arrived normally once buffered instead.
+  let contextReady = false;
+  const earlyMessages = [];
+  let handleMessage; // assigned below, once runGroq and the rest are in scope
+  ws.on('message', (raw) => {
+    if (contextReady) handleMessage(raw);
+    else earlyMessages.push(raw);
+  });
+
   // Load context — fall back to defaults if Supabase is unavailable
   let systemPrompt = 'Sos Coder, el asistente personal de Joshua. Hablás en español rioplatense, sos directo e inteligente.';
   let facts = [];
@@ -583,7 +631,7 @@ wss.on('connection', async (ws) => {
     let response = await groq.chat.completions.create({
       model: MODEL,
       messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
-      tools: ALL_TOOLS,
+      tools: AVAILABLE_TOOLS,
       tool_choice: 'auto',
     });
 
@@ -862,7 +910,7 @@ wss.on('connection', async (ws) => {
       response = await groq.chat.completions.create({
         model: MODEL,
         messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
-        tools: ALL_TOOLS,
+        tools: AVAILABLE_TOOLS,
         tool_choice: 'auto',
       });
       choice = response.choices[0];
@@ -876,7 +924,7 @@ wss.on('connection', async (ws) => {
     safeSend(ws, { type: 'status', text: 'listening' });
   }
 
-  ws.on('message', async (raw) => {
+  handleMessage = async (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
 
@@ -915,8 +963,12 @@ wss.on('connection', async (ws) => {
               ? `\n\n(este archivo tiene ${msg.text.length} caracteres en total, pero solo se cargaron los primeros ${MAX_TOOL_CONTENT_CHARS} — avisale a Joshua que estás viendo solo una parte y, si necesita el resto, pedile que te diga qué sección específica)`
               : '';
             userContent = `[Archivo adjunto: ${msg.filename}]\n\`\`\`\n${preview}\n\`\`\`${nota}`;
-          } else if (msg.mimeType === 'image/jpeg') {
-            userContent = `[Imagen adjunta: ${msg.filename}] (en modo texto no puedo ver imágenes — describila vos si querés que la analice)`;
+          } else if (msg.mimeType === 'image/jpeg' && msg.data != null) {
+            const analisis = await analyzeImage(groq, msg.data, msg.filename);
+            console.log(`[WS] Imagen "${msg.filename}" analizada con ${VISION_MODEL}`);
+            userContent = analisis
+              ? `[Imagen adjunta: ${msg.filename}]\n${analisis}`
+              : `[Imagen adjunta: ${msg.filename}] (no se pudo generar una descripción — pedile a Joshua que la describa él si hace falta)`;
           }
 
           console.log(`[WS] Archivo recibido: ${msg.filename} (${msg.mimeType})`);
@@ -1032,7 +1084,12 @@ wss.on('connection', async (ws) => {
     } catch (err) {
       console.error('[WS] Error procesando mensaje del cliente:', err.message);
     }
-  });
+  };
+
+  // Now that handleMessage is assigned, flush anything that arrived while
+  // Supabase was still loading, in the order it was received.
+  contextReady = true;
+  while (earlyMessages.length) await handleMessage(earlyMessages.shift());
 
   ws.on('close', () => {
     console.log('[WS] Cliente desconectado');
