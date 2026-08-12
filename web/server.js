@@ -546,6 +546,27 @@ function escapeAppleScriptString(str) {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+// gpt-oss-120b occasionally emits a malformed tool call (extra/missing
+// field, wrong type) that Groq rejects server-side before the request ever
+// reaches our tool-dispatch code — confirmed against Render: same prompt,
+// same tool schema, sometimes goes through clean, sometimes doesn't. That
+// non-determinism means it's cheap to just retry the completion once rather
+// than chase a specific malformed-argument shape that may not repeat.
+function isToolCallValidationError(err) {
+  const msg = String(err?.error?.error?.message ?? err?.error?.message ?? err?.message ?? '');
+  return /tool call validation failed/i.test(msg) || /parameters for tool/i.test(msg);
+}
+
+async function createChatCompletionWithRetry(groq, params) {
+  try {
+    return await groq.chat.completions.create(params);
+  } catch (err) {
+    if (!isToolCallValidationError(err)) throw err;
+    console.warn('[Groq] Tool call inválido del modelo, reintentando una vez:', err.message);
+    return await groq.chat.completions.create(params);
+  }
+}
+
 // Groq SDK errors carry status/error.code/error.type from the API response
 // (see node_modules/groq-sdk/core/error.js) — log all of it so a failure is
 // diagnosable from `render logs` alone, and turn it into a message that
@@ -628,7 +649,7 @@ wss.on('connection', async (ws) => {
     // Computed fresh per call, not baked into systemContent once at connect
     // time — a long-running session would otherwise anchor "now" to whenever
     // the WS connected, hours stale by the time crear_recordatorio needs it.
-    let response = await groq.chat.completions.create({
+    let response = await createChatCompletionWithRetry(groq, {
       model: MODEL,
       messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
       tools: AVAILABLE_TOOLS,
@@ -907,7 +928,7 @@ wss.on('connection', async (ws) => {
         });
       }
 
-      response = await groq.chat.completions.create({
+      response = await createChatCompletionWithRetry(groq, {
         model: MODEL,
         messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
         tools: AVAILABLE_TOOLS,

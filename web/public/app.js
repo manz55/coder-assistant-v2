@@ -26,6 +26,9 @@ const contentTitle  = document.getElementById('content-title');
 const contentBadge  = document.getElementById('content-badge');
 const contentBody   = document.getElementById('content-body');
 const contentClose  = document.getElementById('content-close');
+const responsePanel = document.getElementById('response-panel');
+const responseBody  = document.getElementById('response-body');
+const responseClose = document.getElementById('response-close');
 const imagePanel    = document.getElementById('image-panel');
 const imageTitle    = document.getElementById('image-title');
 const imageGrid     = document.getElementById('image-grid');
@@ -188,6 +191,7 @@ transcriptEl.addEventListener('scroll', () => scrollLatest.classList.toggle('sho
 scrollLatest.onclick = () => scrollTranscript(true);
 
 function startUserTurn(text) {
+  hideResponsePanel(); // next message arrived — don't leave the previous long reply's panel lingering
   addBubble('user', text);
   coderBubbleEl = addTypingBubble();
   coderText = '';
@@ -238,6 +242,31 @@ function hideContent() {
 }
 
 contentClose.onclick = hideContent;
+
+// ── Long response panel — auto-dismissing ─────────────────────────────────────
+// Short replies stay in the transcript bubble only. Long ones also get this
+// dedicated panel so they're comfortable to read, up for 50s (mid the
+// requested 45-60s range) or until the next turn starts, then it fades away
+// on its own instead of sitting there forever.
+
+const LONG_RESPONSE_THRESHOLD_CHARS = 300;
+const RESPONSE_PANEL_VISIBLE_MS = 50000;
+let responseHideTimer = null;
+
+function showResponsePanel(text) {
+  clearTimeout(responseHideTimer);
+  responseBody.textContent = text;
+  responsePanel.classList.add('show');
+  responseHideTimer = setTimeout(hideResponsePanel, RESPONSE_PANEL_VISIBLE_MS);
+}
+
+function hideResponsePanel() {
+  clearTimeout(responseHideTimer);
+  responseHideTimer = null;
+  responsePanel.classList.remove('show');
+}
+
+responseClose.onclick = hideResponsePanel;
 
 // ── Image results panel (buscar_imagen_stock tool) ────────────────────────────
 
@@ -441,6 +470,11 @@ async function connectSession() {
       case 'text':
         appendTranscript(msg.content);
         speakText(msg.content);
+        if (msg.content.length > LONG_RESPONSE_THRESHOLD_CHARS) {
+          showResponsePanel(msg.content);
+        } else if (responsePanel.classList.contains('show')) {
+          hideResponsePanel(); // a short reply shouldn't leave a stale long one lingering
+        }
         break;
       case 'stt_result':
         startUserTurn(msg.text);
@@ -526,6 +560,7 @@ function disconnectSession() {
   if (recording) stopRecording();
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   ttsPlaying = false;
+  hideResponsePanel();
 
   ws?.close();
   ws = null;

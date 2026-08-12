@@ -187,7 +187,7 @@ export const ALL_TOOLS = [
           repo: { type: 'string', description: 'Nombre del repositorio, ej. "coder-assistant-v2"' },
           pregunta: {
             type: 'string',
-            description: 'Opcional — qué buscar específicamente en el repo (ej. "cómo maneja la autenticación"). Si no la mandás, hace un resumen general del repo.',
+            description: 'Qué buscar específicamente en el repo (ej. "cómo maneja la autenticación"). Omití esta clave por completo — nunca mandes null ni "" — si Joshua pidió un panorama general y no una pregunta puntual.',
           },
         },
         required: ['repo'],
