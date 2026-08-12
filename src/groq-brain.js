@@ -1,4 +1,5 @@
 import Groq from 'groq-sdk';
+import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai';
 
 // llama-3.3-70b-versatile: Groq announced its deprecation 2026-06-17, hard
 // shutdown 2026-08-16 — requests started failing before the cutover date.
@@ -9,6 +10,17 @@ export const MODEL = 'openai/gpt-oss-120b';
 // Used exclusively for image attachments (see analyzeImage in web/server.js);
 // the main conversation stays on MODEL.
 export const VISION_MODEL = 'qwen/qwen3.6-27b';
+// Fallback provider for when Groq's daily token quota runs out (happened 3x
+// in 2 days — see createGeminiClient/createChatCompletionWithFallback in
+// web/server.js). Went with Gemini over Cerebras because Cerebras's free
+// trial requires a verified payment method to activate (confirmed against
+// their rate-limits doc) — doesn't meet the zero-cost requirement. Gemini's
+// AI Studio key is free with no card. gemini-3.6-flash confirmed live via
+// GET /v1beta/models against the real GEMINI_API_KEY already in .env
+// (leftover from before this project moved to Groq) — it's the newest
+// non-preview flash model, appropriate for a fallback path that should be
+// stable rather than experimental.
+export const GEMINI_MODEL = 'gemini-3.6-flash';
 export const CATEGORIAS_VALIDAS = ['perfil', 'proyectos', 'ventas_jzet_labs', 'dev_preferences', 'personal'];
 export const TIPOS_CONTENIDO_VALIDOS = ['codigo', 'sql', 'texto', 'lista'];
 
@@ -377,6 +389,205 @@ export const DARWIN_ONLY_TOOLS = new Set(['controlar_volumen', 'controlar_brillo
 export const AVAILABLE_TOOLS = process.platform === 'darwin'
   ? ALL_TOOLS
   : ALL_TOOLS.filter(t => !DARWIN_ONLY_TOOLS.has(t.function.name));
+
+// Gemini's tool format isn't OpenAI-compatible (unlike Groq/Cerebras) — it
+// wants { functionDeclarations: [{ name, description, parametersJsonSchema }] }
+// instead of { type: 'function', function: { name, description, parameters } }.
+// The one piece that DOES carry over as-is is `parameters` itself: it's
+// already plain JSON Schema (lowercase "object"/"string", not the older
+// Gemini-specific uppercase Type enum), and `parametersJsonSchema` accepts
+// exactly that per @google/genai's FunctionDeclaration type — confirmed by
+// generating real Gemini responses against this exact array (see
+// createChatCompletionWithFallback in web/server.js). Built from
+// AVAILABLE_TOOLS (not ALL_TOOLS) so the darwin-only filtering stays
+// consistent between providers.
+function toGeminiFunctionDeclarations(tools) {
+  return tools.map((t) => ({
+    name: t.function.name,
+    description: t.function.description,
+    parametersJsonSchema: t.function.parameters,
+  }));
+}
+
+// Gemini 3.x ("thinking") models attach a thoughtSignature to each
+// functionCall Part and reject the next request with a 400 if a prior
+// model-turn functionCall in history comes back without it — confirmed by
+// actually hitting this live on turn 2 of a multi-hop tool loop (e.g.
+// guardar_hecho followed by entregar_respuesta): "Function call is missing a
+// thought_signature in functionCall parts". The signature lives on the Part
+// itself, as a sibling of `functionCall` — NOT inside the FunctionCall
+// object — so it doesn't survive the round trip through our OpenAI-shaped
+// chatHistory (tc.function.{name,arguments}) unless carried separately. This
+// map does that: adaptGeminiResponse fills it keyed by the synthesized
+// tool_call id, convertMessagesToGemini reads it back when reconstructing
+// that same call's functionCall Part for a later request.
+//
+// Known gap: this only covers calls that themselves came from Gemini. A call
+// that came from Groq (no signature was ever issued for it) and then needs
+// to be echoed back to Gemini on a later hop of the same turn — i.e. Groq
+// succeeds once, then fails mid-turn — isn't handled; Gemini's docs don't
+// document a workaround for a missing signature on an externally-sourced
+// call. Not exercised by testing (Groq's quota exhaustion doesn't flip-flop
+// within one conversation turn in practice), so left as a known limitation
+// rather than guessed at.
+const geminiThoughtSignatures = new Map();
+
+// Converts our OpenAI-shaped messages array (system + chatHistory, same
+// thing sent to Groq) into Gemini's { systemInstruction, contents } shape.
+// Gemini has no "system" or "tool" role — system content is a separate
+// config field, and both function calls and function results live as parts
+// on 'model'/'user' turns respectively. OpenAI tool-result messages only
+// carry tool_call_id, not the function name Gemini's FunctionResponse
+// requires, so the preceding assistant tool_calls entries are scanned first
+// to build an id → name lookup.
+function convertMessagesToGemini(messages) {
+  let systemInstruction;
+  const toolNameById = new Map();
+  for (const m of messages) {
+    if (m.role === 'assistant' && m.tool_calls) {
+      for (const tc of m.tool_calls) toolNameById.set(tc.id, tc.function.name);
+    }
+  }
+
+  const contents = [];
+  for (const m of messages) {
+    if (m.role === 'system') {
+      systemInstruction = m.content;
+    } else if (m.role === 'user') {
+      contents.push({ role: 'user', parts: [{ text: m.content }] });
+    } else if (m.role === 'assistant') {
+      if (m.tool_calls?.length) {
+        contents.push({
+          role: 'model',
+          parts: m.tool_calls.map((tc) => {
+            const thoughtSignature = geminiThoughtSignatures.get(tc.id);
+            return {
+              functionCall: { name: tc.function.name, args: JSON.parse(tc.function.arguments || '{}') },
+              ...(thoughtSignature ? { thoughtSignature } : {}),
+            };
+          }),
+        });
+      } else {
+        contents.push({ role: 'model', parts: [{ text: m.content ?? '' }] });
+      }
+    } else if (m.role === 'tool') {
+      const name = toolNameById.get(m.tool_call_id) ?? 'unknown_tool';
+      let response;
+      try { response = JSON.parse(m.content); } catch { response = { raw: m.content }; }
+      const part = { functionResponse: { name, response } };
+      // Gemini expects the N function results answering one model turn's N
+      // function calls to land as N parts on a single 'user' Content, not N
+      // separate turns — bundle onto the previous Content when it's already
+      // an all-functionResponse 'user' turn instead of starting a new one.
+      const last = contents[contents.length - 1];
+      if (last?.role === 'user' && last.parts.every((p) => p.functionResponse)) {
+        last.parts.push(part);
+      } else {
+        contents.push({ role: 'user', parts: [part] });
+      }
+    }
+  }
+
+  return { systemInstruction, contents };
+}
+
+function toGeminiToolChoiceMode(toolChoice) {
+  if (toolChoice === 'required') return FunctionCallingConfigMode.ANY;
+  if (toolChoice === 'none') return FunctionCallingConfigMode.NONE;
+  return FunctionCallingConfigMode.AUTO;
+}
+
+// Mirrors groq-sdk's ChatCompletion shape ({ choices: [{ finish_reason,
+// message: { content, tool_calls } }] }) so the exact same tool-dispatch
+// loop in web/server.js (reading choice.finish_reason, tc.function.name,
+// JSON.parse(tc.function.arguments), pushing choice.message straight into
+// chatHistory) works unmodified regardless of which provider answered.
+// Gemini's FunctionCall.args is already a parsed object (not a JSON string
+// like OpenAI's tc.function.arguments), and fc.id is usually unset — Gemini
+// only needs it back for NON_BLOCKING/streaming function calls, which this
+// integration doesn't use — so a synthesized id is fine as long as it's
+// unique within the turn, since that id only has to round-trip through our
+// own chatHistory to pair a tool result back to its call.
+//
+// Reads response.candidates[0].content.parts directly instead of the
+// response.functionCalls convenience getter — that getter only surfaces
+// {id, name, args}, dropping the sibling thoughtSignature field each Part
+// actually carries (see geminiThoughtSignatures above for why that matters).
+function adaptGeminiResponse(response) {
+  const parts = response.candidates?.[0]?.content?.parts ?? [];
+  const functionCallParts = parts.filter((p) => p.functionCall);
+
+  if (functionCallParts.length) {
+    return {
+      choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: functionCallParts.map((p, i) => {
+            const id = p.functionCall.id ?? `gemini_${Date.now()}_${i}`;
+            if (p.thoughtSignature) geminiThoughtSignatures.set(id, p.thoughtSignature);
+            return {
+              id,
+              type: 'function',
+              function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args ?? {}) },
+            };
+          }),
+        },
+      }],
+    };
+  }
+
+  return {
+    choices: [{
+      finish_reason: 'stop',
+      message: { role: 'assistant', content: response.text ?? '' },
+    }],
+  };
+}
+
+// Wraps @google/genai's GoogleGenAI client to expose the same
+// `.chat.completions.create(params)` shape the rest of the codebase already
+// calls on the Groq client, so createChatCompletionWithRetry and
+// createChatCompletionWithFallback in web/server.js work against either
+// provider without branching on which one they're talking to.
+export function createGeminiClient(apiKey) {
+  const ai = new GoogleGenAI({ apiKey });
+
+  return {
+    chat: {
+      completions: {
+        async create(params) {
+          const { systemInstruction, contents } = convertMessagesToGemini(params.messages);
+          const functionDeclarations = toGeminiFunctionDeclarations(params.tools ?? []);
+
+          let response;
+          try {
+            response = await ai.models.generateContent({
+              model: params.model || GEMINI_MODEL,
+              contents,
+              config: {
+                systemInstruction,
+                ...(functionDeclarations.length ? { tools: [{ functionDeclarations }] } : {}),
+                toolConfig: {
+                  functionCallingConfig: { mode: toGeminiToolChoiceMode(params.tool_choice) },
+                },
+              },
+            });
+          } catch (err) {
+            // @google/genai's ApiError already carries .status and .message
+            // directly on the Error (node_modules/@google/genai/dist/node/node.d.ts)
+            // — no extra unwrapping needed for the err?.status / err?.message
+            // checks in isQuotaExhaustedError/describeGroqError to work.
+            throw err;
+          }
+
+          return adaptGeminiResponse(response);
+        },
+      },
+    },
+  };
+}
 
 const REMINDER_TIMEZONE = 'America/Guatemala'; // UTC-6, no DST
 

@@ -12,7 +12,7 @@ import Groq, { toFile } from 'groq-sdk';
 import { PDFParse } from 'pdf-parse';
 import nodemailer from 'nodemailer';
 import { getSystemPrompt, getRelevantFacts, saveFact, createReminder, getDueReminders, markReminderNotified } from '../src/memory.js';
-import { MODEL, VISION_MODEL, AVAILABLE_TOOLS, DARWIN_ONLY_TOOLS, buildSystemContent, currentDateTimeBlock } from '../src/groq-brain.js';
+import { MODEL, VISION_MODEL, AVAILABLE_TOOLS, DARWIN_ONLY_TOOLS, GEMINI_MODEL, createGeminiClient, buildSystemContent, currentDateTimeBlock } from '../src/groq-brain.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.WEB_PORT || 3000;
@@ -574,13 +574,53 @@ function missingDarwinTool(err) {
   return [...DARWIN_ONLY_TOOLS].find((name) => msg.includes(name)) ?? null;
 }
 
-async function createChatCompletionWithRetry(groq, params) {
+async function createChatCompletionWithRetry(client, params) {
   try {
-    return await groq.chat.completions.create(params);
+    return await client.chat.completions.create(params);
   } catch (err) {
+    // The Groq-specific message patterns this checks for never match a
+    // Gemini ApiError, so on the Gemini client this is effectively a no-op
+    // that just rethrows immediately — harmless, no wasted retry.
     if (!isToolCallValidationError(err)) throw err;
-    console.warn('[Groq] Tool call inválido del modelo, reintentando una vez:', err.message);
-    return await groq.chat.completions.create(params);
+    console.warn('[LLM] Tool call inválido del modelo, reintentando una vez:', err.message);
+    return await client.chat.completions.create(params);
+  }
+}
+
+// Groq's free tier hit its daily token quota 3 times in 2 days — confirmed
+// live against Render (every message returned the same 429 rate_limit_exceeded,
+// independent of topic). Went with Gemini over Cerebras as the fallback
+// because Cerebras's free trial needs a verified card to activate — doesn't
+// meet the zero-cost bar. Gemini's tool/message format isn't OpenAI-
+// compatible at all (unlike Cerebras, which was just a wrong base path
+// away), so createGeminiClient in groq-brain.js does the format translation
+// both ways and exposes the same `.chat.completions.create(params)` shape
+// the Groq client has — from here down, this function doesn't need to know
+// or care which provider it's talking to. Silently a no-op (just rethrows
+// the Groq error) when GEMINI_API_KEY isn't configured, so this is safe to
+// call unconditionally.
+function isQuotaExhaustedError(err) {
+  if (err?.status === 429) return true;
+  const body = err?.error?.error ?? err?.error ?? {};
+  const msg = String(body?.message ?? err?.message ?? '');
+  return body?.code === 'rate_limit_exceeded' || /rate limit/i.test(msg) || /quota/i.test(msg);
+}
+
+async function createChatCompletionWithFallback(groq, gemini, params) {
+  try {
+    return await createChatCompletionWithRetry(groq, { ...params, model: MODEL });
+  } catch (err) {
+    if (!gemini || !isQuotaExhaustedError(err)) throw err;
+    console.warn(`[Fallback] Groq sin cupo (${err.message}) — reintentando con Gemini (${GEMINI_MODEL})`);
+    try {
+      const response = await createChatCompletionWithRetry(gemini, { ...params, model: GEMINI_MODEL });
+      console.warn('[Fallback] Gemini respondió OK — este turno se sirvió con el fallback, no con Groq.');
+      return response;
+    } catch (fallbackErr) {
+      console.error('[Fallback] Gemini también falló:', fallbackErr.message);
+      fallbackErr.fallbackAttempted = true;
+      throw fallbackErr;
+    }
   }
 }
 
@@ -596,14 +636,23 @@ function describeGroqError(err) {
   const code = body?.code ?? err?.code ?? null;
   const type = body?.type ?? null;
   const apiMessage = body?.message ?? err?.message ?? String(err);
+  // Set by createChatCompletionWithFallback when it was the Gemini retry
+  // that ultimately failed — everything past this point happened on
+  // Gemini, not Groq, so both the log line and the message need to say so.
+  const viaFallback = err?.fallbackAttempted === true;
+  const provider = viaFallback ? 'Gemini (fallback)' : 'Groq';
 
   console.error(
-    `[Groq] status=${status ?? 'n/a'} code=${code ?? 'n/a'} type=${type ?? 'n/a'} model=${MODEL} — ${apiMessage}`
+    `[${provider}] status=${status ?? 'n/a'} code=${code ?? 'n/a'} type=${type ?? 'n/a'} model=${viaFallback ? GEMINI_MODEL : MODEL} — ${apiMessage}`
   );
 
   const darwinTool = missingDarwinTool(err);
   if (darwinTool) return '(esa acción es de control de la Mac de Joshua y este server no corre en una Mac — no la tengo disponible acá)';
-  if (status === 401) return '(Groq rechazó la API key — revisá GROQ_API_KEY en las variables de entorno del servidor)';
+  if (status === 401) {
+    return viaFallback
+      ? '(Gemini rechazó la API key — revisá GEMINI_API_KEY en las variables de entorno del servidor)'
+      : '(Groq rechazó la API key — revisá GROQ_API_KEY en las variables de entorno del servidor)';
+  }
   // Groq returns 413 (sometimes bundled under a generic rate_limit_exceeded
   // code) when a single request's tokens blow past the free-tier TPM limit
   // — most often a big file or search result stuffed into tool content, even
@@ -611,13 +660,19 @@ function describeGroqError(err) {
   if (status === 413 || /too large/i.test(apiMessage)) {
     return '(ese archivo o resultado es muy grande para leerlo de una — pedime una parte específica en vez de todo junto)';
   }
-  if (status === 429) return '(límite de uso de Groq alcanzado — esperá un momento y probá de nuevo)';
-  if (code === 'model_decommissioned' || code === 'model_not_found') {
-    return `(el modelo "${MODEL}" no está disponible en Groq — hay que actualizar MODEL en src/groq-brain.js)`;
+  if (status === 429) {
+    return viaFallback
+      ? '(Groq se quedó sin cupo y el fallback de Gemini también está al límite ahora mismo — probá de nuevo más tarde)'
+      : '(límite de uso de Groq alcanzado — esperá un momento y probá de nuevo)';
   }
-  if (typeof status === 'number' && status >= 500) return '(Groq está teniendo problemas del lado de ellos — probá de nuevo en un rato)';
+  if (code === 'model_decommissioned' || code === 'model_not_found') {
+    return viaFallback
+      ? `(el modelo "${GEMINI_MODEL}" no está disponible en Gemini — hay que actualizar GEMINI_MODEL en src/groq-brain.js)`
+      : `(el modelo "${MODEL}" no está disponible en Groq — hay que actualizar MODEL en src/groq-brain.js)`;
+  }
+  if (typeof status === 'number' && status >= 500) return `(${provider} está teniendo problemas del lado de ellos — probá de nuevo en un rato)`;
 
-  return `(error contactando Groq — ${String(apiMessage).slice(0, 100)})`;
+  return `(error contactando ${provider} — ${String(apiMessage).slice(0, 100)})`;
 }
 
 wss.on('connection', async (ws) => {
@@ -659,6 +714,13 @@ wss.on('connection', async (ws) => {
   const systemContent = buildSystemContent(systemPrompt, facts);
   const chatHistory = [];
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  // Only set up when GEMINI_API_KEY exists — the fallback in
+  // createChatCompletionWithFallback no-ops (throws the original Groq error)
+  // when this is null, so leaving it unset just disables the fallback
+  // instead of breaking anything.
+  const gemini = process.env.GEMINI_API_KEY
+    ? createGeminiClient(process.env.GEMINI_API_KEY)
+    : null;
 
   safeSend(ws, { type: 'status', text: 'ready' });
 
@@ -672,8 +734,7 @@ wss.on('connection', async (ws) => {
     // text message — it always has to go through entregar_respuesta, which
     // is what forces the respuesta_corta/desarrollo_completo split instead
     // of relying on the model remembering a text-formatting rule.
-    let response = await createChatCompletionWithRetry(groq, {
-      model: MODEL,
+    let response = await createChatCompletionWithFallback(groq, gemini, {
       messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
       tools: AVAILABLE_TOOLS,
       tool_choice: 'required',
@@ -961,8 +1022,7 @@ wss.on('connection', async (ws) => {
       }
 
       if (!respuestaFinal) {
-        response = await createChatCompletionWithRetry(groq, {
-          model: MODEL,
+        response = await createChatCompletionWithFallback(groq, gemini, {
           messages: [{ role: 'system', content: `${systemContent}\n\n${currentDateTimeBlock()}` }, ...chatHistory],
           tools: AVAILABLE_TOOLS,
           tool_choice: 'required',
