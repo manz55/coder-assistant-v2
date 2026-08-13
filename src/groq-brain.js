@@ -331,7 +331,12 @@ export const ALL_TOOLS = [
       description:
         'SIEMPRE terminá tu turno invocando esta tool — nunca respondas con texto plano suelto, ' +
         'incluso para un saludo simple. Te obliga a separar tu respuesta en dos versiones, porque el ' +
-        'frontend lee una en voz alta y muestra la otra en pantalla, y no puede adivinar cuál es cuál.',
+        'frontend lee una en voz alta y muestra la otra en pantalla, y no puede adivinar cuál es cuál. ' +
+        'También es la que usás cuando NINGUNA otra tool aplica al pedido — por ejemplo, si te piden algo ' +
+        'que ninguna tool de esta lista puede hacer, o una tool que existe pero no está disponible ahora ' +
+        '(como las de control de Mac cuando no estás corriendo ahí). En esos casos, llamala directo, sin ' +
+        'pasar antes por ninguna otra tool, y usá respuesta_corta para explicar en una frase por qué no se ' +
+        'puede — nunca falles el turno intentando forzar una tool que no corresponde.',
       parameters: {
         type: 'object',
         properties: {
@@ -344,12 +349,20 @@ export const ALL_TOOLS = [
               '("te dejé la fórmula en pantalla") y el detalle real va en desarrollo_completo.',
           },
           desarrollo_completo: {
-            type: 'string',
+            // "string" solo (con el campo fuera de required) no alcanza: el
+            // modelo manda `null` explícito para "no aplica" en vez de
+            // omitir la clave — confirmado en vivo, Groq lo rechaza con
+            // "expected string, but got null" porque null no es un string
+            // válido aunque el campo sea opcional. Aceptar null en el schema
+            // también es más barato que perseguir que el modelo nunca lo
+            // mande — ya perdimos esa apuesta una vez con la instrucción de
+            // texto que decía lo mismo.
+            type: ['string', 'null'],
             description:
               'Opcional — solo cuando hay contenido largo o técnico que vale la pena mostrar en pantalla ' +
               '(código, LaTeX, tablas, un desarrollo paso a paso). Puede tener markdown/LaTeX crudo, formato ' +
               'técnico, lo que haga falta. Si la respuesta ya es corta y no hay nada más que mostrar, omití ' +
-              'esta clave por completo — nunca mandes null ni "" ni la repitas idéntica a respuesta_corta.',
+              'esta clave o mandá null — nunca la repitas idéntica a respuesta_corta.',
           },
         },
         required: ['respuesta_corta'],

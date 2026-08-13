@@ -552,9 +552,29 @@ function escapeAppleScriptString(str) {
 // same tool schema, sometimes goes through clean, sometimes doesn't. That
 // non-determinism means it's cheap to just retry the completion once rather
 // than chase a specific malformed-argument shape that may not repeat.
+//
+// tool_choice: 'required' (needed to force entregar_respuesta every turn)
+// made this worse in a specific way, confirmed by repeatedly reproducing
+// "subí el brillo" against the real model with AVAILABLE_TOOLS filtered to
+// non-darwin: when no other tool obviously fits the request, gpt-oss-120b
+// sometimes leaks its internal "harmony" chat-template channel tokens
+// (gpt-oss models plan across analysis/commentary/final channels — see
+// OpenAI's gpt-oss model card) into the tool-call slot as if 'json' or
+// 'commentary' were real tool names, and Groq rejects those with "attempted
+// to call tool 'X' which was not in request.tools" (already covered above).
+// The harder case Joshua actually hit in production is Groq's OWN
+// tool_choice: 'required' enforcement rejecting a response outright when the
+// model's raw generation didn't produce a parseable tool call at all —
+// "Tool choice is required, but model did not call a tool" — which matched
+// none of the patterns above, so it skipped the retry and leaked straight to
+// the user. Added here so it gets the same one-shot retry as everything else.
 function isToolCallValidationError(err) {
   const msg = String(err?.error?.error?.message ?? err?.error?.message ?? err?.message ?? '');
-  return /tool call validation failed/i.test(msg) || /parameters for tool/i.test(msg) || /was not defined in the request/i.test(msg);
+  return /tool call validation failed/i.test(msg)
+    || /parameters for tool/i.test(msg)
+    || /was not defined in the request/i.test(msg)
+    || /did not call a tool/i.test(msg)
+    || /tool choice is required/i.test(msg);
 }
 
 // The system prompt has a hard rule telling the model to always call
@@ -648,6 +668,14 @@ function describeGroqError(err) {
 
   const darwinTool = missingDarwinTool(err);
   if (darwinTool) return '(esa acción es de control de la Mac de Joshua y este server no corre en una Mac — no la tengo disponible acá)';
+  // Same error class createChatCompletionWithRetry already retries once
+  // (isToolCallValidationError) — this only fires when it happened again on
+  // the retry too, so a friendly message goes out instead of Groq's raw
+  // "Tool call validation failed: ..." / "Tool choice is required, but
+  // model did not call a tool" text.
+  if (isToolCallValidationError(err)) {
+    return '(tuve un problema armando la respuesta ahí — pedímelo de nuevo)';
+  }
   if (status === 401) {
     return viaFallback
       ? '(Gemini rechazó la API key — revisá GEMINI_API_KEY en las variables de entorno del servidor)'
